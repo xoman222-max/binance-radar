@@ -1,0 +1,16 @@
+{
+  "name": "幣安合約雷達",
+  "short_name": "合約雷達",
+  "description": "幣安 USDT 永續合約的轉弱警示、多頭續強、放量突破監控",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "lang": "zh-Hant",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
