@@ -143,11 +143,12 @@ nav.tabs .n.hot{background:var(--strong);color:#fff}
 <script>
 'use strict';
 const API = 'https://fapi.binance.com';
-const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: true, notifySetup: true, setupMin: 6, ver: 2, sound: true, redUp: false, wake: false, tradfi: true, tgToken: '', tgChat: '', watchlist: [] };
+const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: true, notifySetup: true, setupMin: 6, ver: 3, sound: false, vibrate: true, redUp: false, wake: false, tradfi: true, tgToken: '', tgChat: '', watchlist: [] };
 function loadSettings() { try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('bnRadarSettings') || '{}')); } catch (e) { return Object.assign({}, DEFAULTS); } }
 function saveSettings() { try { localStorage.setItem('bnRadarSettings', JSON.stringify(S)); } catch (e) {} }
 let S = loadSettings();
-if ((S.ver || 1) < 2) { S.notifyBreakout = true; S.notifySetup = true; S.ver = 2; saveSettings(); } // 舊版設定：突破和埋伏通知預設改成開啟
+if ((S.ver || 1) < 2) { S.notifyBreakout = true; S.notifySetup = true; } // 舊版設定：突破和埋伏通知預設改成開啟
+if ((S.ver || 1) < 3) { S.sound = false; S.vibrate = true; S.ver = 3; saveSettings(); } // 提示音預設改成關閉
 
 const state = { info: new Map(), infoAt: 0, results: [], universe: [], byTab: {}, lastScan: 0, nextScan: 0, scanning: false,
   firstDone: false, alerted: new Map(), log: [], tab: 'warn', sort: 'score', timer: null, sheet: null, swReg: null, wakeLock: null };
@@ -436,7 +437,7 @@ function notify(kind, title, body) {
   while ($('toasts').children.length > 3) $('toasts').lastChild.remove();
   sysNotify(title, body);
   beep();
-  try { if (navigator.vibrate) navigator.vibrate([120, 60, 120]); } catch (e) {}
+  try { if (S.vibrate && navigator.vibrate) navigator.vibrate([120, 60, 120]); } catch (e) {}
   tgSend(`${title}\n${body}`);
 }
 function sysNotify(title, body) {
@@ -589,7 +590,8 @@ function openSettings() {
     <div class="row"><label>放量突破通知<small>剛收的 1H K 線放量站上 20H 高點</small></label>${sw('s_notifyBreakout', S.notifyBreakout)}</div>
     <div class="row"><label>值得埋伏通知</label>${sw('s_notifySetup', S.notifySetup)}</div>
     <div class="row"><label>埋伏通知門檻</label><select id="s_setupMin">${[[5, '5 分（較多）'], [6, '6 分（建議）'], [7, '7 分（只看最漂亮的）']].map(([v, t]) => `<option value="${v}" ${S.setupMin === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-    <div class="row"><label>提示音和震動</label>${sw('s_sound', S.sound)}</div>
+    <div class="row"><label>提示音</label>${sw('s_sound', S.sound)}</div>
+    <div class="row"><label>震動<small>iPhone 的網頁不支援震動</small></label>${sw('s_vibrate', S.vibrate)}</div>
     <div class="row"><label>保持螢幕常亮<small>App 開著時螢幕不會自動關，就能一直掃描</small></label>${sw('s_wake', S.wake)}</div>
     <div class="row"><label>包含股票、商品合約<small>例如 NVDA、黃金；美股休市時波動和量會變小</small></label>${sw('s_tradfi', S.tradfi)}</div>
     <div class="row"><label>紅漲綠跌</label>${sw('s_redUp', S.redUp)}</div>
@@ -606,7 +608,7 @@ function readSettings() {
   S.watchVol = Math.max(0.5, +$('s_watchVol').value || DEFAULTS.watchVol);
   S.interval = +$('s_interval').value; S.alertMin = +$('s_alertMin').value;
   S.setupMin = +$('s_setupMin').value;
-  for (const k of ['notifyDrop', 'notifyBreakout', 'notifySetup', 'sound', 'wake', 'redUp', 'tradfi']) S[k] = $('s_' + k).checked;
+  for (const k of ['notifyDrop', 'notifyBreakout', 'notifySetup', 'sound', 'vibrate', 'wake', 'redUp', 'tradfi']) S[k] = $('s_' + k).checked;
   S.tgToken = $('s_tgToken').value.trim(); S.tgChat = $('s_tgChat').value.trim();
 }
 function openLog() {
