@@ -143,10 +143,11 @@ nav.tabs .n.hot{background:var(--strong);color:#fff}
 <script>
 'use strict';
 const API = 'https://fapi.binance.com';
-const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: false, sound: true, redUp: false, wake: false, tradfi: true, tgToken: '', tgChat: '', watchlist: [] };
+const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: true, notifySetup: true, setupMin: 6, ver: 2, sound: true, redUp: false, wake: false, tradfi: true, tgToken: '', tgChat: '', watchlist: [] };
 function loadSettings() { try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('bnRadarSettings') || '{}')); } catch (e) { return Object.assign({}, DEFAULTS); } }
 function saveSettings() { try { localStorage.setItem('bnRadarSettings', JSON.stringify(S)); } catch (e) {} }
 let S = loadSettings();
+if ((S.ver || 1) < 2) { S.notifyBreakout = true; S.notifySetup = true; S.ver = 2; saveSettings(); } // 舊版設定：突破和埋伏通知預設改成開啟
 
 const state = { info: new Map(), infoAt: 0, results: [], universe: [], byTab: {}, lastScan: 0, nextScan: 0, scanning: false,
   firstDone: false, alerted: new Map(), log: [], tab: 'warn', sort: 'score', timer: null, sheet: null, swReg: null, wakeLock: null };
@@ -291,6 +292,34 @@ function analyze(t, k, fund) {
   if (r.brk && !r.brk.holding && p < r.brk.level * 0.995) W(2, '放量突破後又跌回突破位（假突破）', 'fake');
   r.warnScore = sum(r.warns.map((w) => w.pts));
   r.supports = [r.E21, r.E55, r.swingLow, r.low24].filter((v) => isFinite(v) && v < p * 0.998).sort((a, b) => b - a).slice(0, 2);
+
+  /* ---- 值得埋伏：波動收斂、貼近壓力、趨勢沒壞、還沒噴 ---- */
+  if (n >= 80) {
+    const bbw = [];
+    for (let i = 19; i < n; i++) {
+      const w = closes.slice(i - 19, i + 1), m = sum(w) / 20;
+      bbw.push(Math.sqrt(sum(w.map((x) => (x - m) ** 2)) / 20) * 4 / m);
+    }
+    const recent = bbw.slice(-60), wNow = bbw[bbw.length - 1];
+    const rank = recent.filter((x) => x < wNow).length / recent.length; // 0 = 最窄
+    const res = Math.max(...done.slice(n - 20).map((b) => b.h));
+    const rangeLow = Math.min(...done.slice(n - 12).map((b) => b.l));
+    const gap = (res / p - 1) * 100;
+    const squeeze = rank <= 0.2;
+    const nearRes = p <= res && gap <= Math.max(1.5, 0.8 * r.atrPct);
+    const trendOk = last.c > r.E55 && r.E21 >= r.E55 * 0.998;
+    const calm = Math.abs(r.c24) <= 8 && Math.abs(r.c4) <= 3;
+    if (squeeze && nearRes && trendOk && calm && r.warnScore < 3 && (r.fund ?? 0) < 0.0005) {
+      const tags = [['g', '波動收斂']];
+      let sc = 4 + (rank <= 0.1 ? 1 : 0);
+      if (rank <= 0.1) tags[0] = ['g', '波動極度收斂'];
+      if (Math.min(...done.slice(n - 6).map((b) => b.l)) > Math.min(...done.slice(n - 12, n - 6).map((b) => b.l))) { sc += 1; tags.push(['g', '低點墊高']); }
+      if (r.volRatio4 < 0.8) { sc += 1; tags.push(['', '量縮整理']); }
+      if (r.fund != null && r.fund < 0) { sc += 1; tags.push(['g', '負費率（空方付費）']); }
+      if (r.E9 > r.E21 && r.E21 > r.E55) { sc += 1; tags.push(['g', '均線多頭排列']); }
+      r.setup = { res, gap, defense: Math.max(rangeLow, r.E55) < p ? Math.max(rangeLow, r.E55) : rangeLow, score: sc, tags, rank };
+    }
+  }
   return r;
 }
 
@@ -302,6 +331,7 @@ function applyOI(r, list) {
   if (r.c4 < 0 && r.oi4 >= 3) r.warns.push({ pts: 1, text: `價跌但持倉量增加 ${r.oi4.toFixed(1)}%（空單加碼）`, key: 'oi' });
   if (r.c4 > 0 && r.oi4 <= -3) { r.warns.push({ pts: 1, text: `價漲但持倉量減少 ${(-r.oi4).toFixed(1)}%（多為空單回補，續航較弱）`, key: 'oi' }); r.flags.push(['w', 'OI 下降']); }
   if (r.isBull && r.oi4 >= 3) r.flags.push(['g', 'OI 增加']);
+  if (r.setup && r.oi4 >= 3 && Math.abs(r.c4) < 2) { r.setup.score += 2; r.setup.tags.push(['g', `價平 OI 增 ${r.oi4.toFixed(1)}%（有人建倉）`]); }
   r.warnScore = sum(r.warns.map((w) => w.pts));
 }
 
@@ -327,6 +357,7 @@ async function scan() {
     const shortlist = [...new Set([
       ...res.filter((r) => r.isBull).sort((a, b) => b.bullScore - a.bullScore).slice(0, 15),
       ...res.filter((r) => r.warnScore >= 2).sort((a, b) => b.warnScore - a.warnScore).slice(0, 30),
+      ...res.filter((r) => r.setup).sort((a, b) => b.setup.score - a.setup.score).slice(0, 20),
       ...res.filter((r) => S.watchlist.includes(r.sym))
     ])].slice(0, 50);
     setStatus('讀取持倉量…'); setProgress(0.9);
@@ -346,6 +377,7 @@ function classify() {
   const R = state.results;
   state.byTab = {
     warn: R.filter((r) => r.warnScore >= 3),
+    setup: R.filter((r) => r.setup),
     bull: R.filter((r) => r.isBull),
     brk: R.filter((r) => r.brk),
     bear: R.filter((r) => r.isBear),
@@ -367,12 +399,19 @@ function handleAlerts() {
       const bk = 'b:' + r.sym + ':' + r.brk.level;
       if (!state.alerted.has(bk)) { items.push({ type: 'brk', r }); state.alerted.set(bk, { t: now }); }
     }
+    const sk = 's:' + r.sym, ps = state.alerted.get(sk);
+    if (!r.setup && ps) state.alerted.delete(sk);
+    if (S.notifySetup && r.setup && r.setup.score >= S.setupMin && (!ps || now - ps.t > 6 * 3600e3)) {
+      items.push({ type: 'setup', r }); state.alerted.set(sk, { t: now });
+    }
   }
   const drops = items.filter((i) => i.type === 'drop').sort((a, b) => b.r.warnScore - a.r.warnScore), brks = items.filter((i) => i.type === 'brk');
   if (drops.length) {
     if (!state.firstDone || drops.length > 3) notify('r', `轉弱警示 ${drops.length} 檔`, drops.slice(0, 8).map((i) => `${i.r.base} ${i.r.warnScore}分 ${fmtShort(i.r)}`).join('\n') + (drops.length > 8 ? `\n…等 ${drops.length} 檔` : ''));
     else drops.forEach((i) => notify('r', `${i.r.base} 轉弱 ${i.r.warnScore} 分`, `${fmtShort(i.r)}\n${i.r.warns.map((w) => '・' + w.text).join('\n')}`));
   }
+  const sets = items.filter((i) => i.type === 'setup').sort((a, b) => b.r.setup.score - a.r.setup.score);
+  if (sets.length) notify('', `值得埋伏 ${sets.length} 檔`, sets.slice(0, 8).map((i) => `${i.r.base} ${i.r.setup.score}分 ${fp(i.r.p, i.r)}｜突破位 ${fp(i.r.setup.res, i.r)}（差 ${i.r.setup.gap.toFixed(1)}%）`).join('\n'));
   if (brks.length) notify('g', `放量突破 ${brks.length} 檔`, brks.slice(0, 8).map((i) => `${i.r.base} 突破 ${fp(i.r.brk.level, i.r)}（量 ${i.r.brk.volX.toFixed(1)} 倍）`).join('\n'));
   state.firstDone = true;
 }
@@ -428,6 +467,7 @@ const IC = {
   bull: '<path d="m3 17 6-6 4 4 8-8"/><path d="M14 7h7v7"/>',
   brk: '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
   bear: '<path d="m3 7 6 6 4-4 8 8"/><path d="M14 17h7v-7"/>',
+  setup: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/>',
   watch: '<path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/>'
 };
 const TABS = {
@@ -435,11 +475,13 @@ const TABS = {
   bull: ['多頭', '多頭續強', '24h／12h／4h／1h 全部上漲，而且 1H 均線多頭排列（EMA9＞21＞55）。分數已扣掉費率過熱和離均線太遠的情況。TP 用 ATR 和 24h 高點估算，只是參考位。'],
   brk: ['突破', '早爆發突破', '最近 3 根 1H K 線有收盤站上前 20 根的高點，而且量是平均的 1.8 倍以上。小量幣假突破比較多，要看能不能守住突破位。'],
   bear: ['空頭', '空頭續弱', '24h／12h／4h／1h 全部下跌，而且 1H 均線空頭排列。EMA21 是反彈壓力位。'],
+  setup: ['埋伏', '值得埋伏', '還沒噴、正在蓄力的幣：1H 波動收斂到近 60 根最窄的 20%，價格貼近 20H 高點（突破位），站在 EMA55 上方，而且沒有轉弱訊號、費率不擁擠。分數越高條件越漂亮，6 分以上會通知。等放量站上突破位才算確認，跌破防守位就是埋伏失敗。'],
   watch: ['自選', '自選', '點卡片上的 ☆ 就能加入自選。自選幣的轉弱分數到 3 分就會通知。']
 };
 const SORTS = { score: '依分數', c24: '依 24h 漲幅', c1: '依 1h 漲幅', qv: '依成交額' };
 function scoreOf(r, tab) {
   if (tab === 'bull') return r.bullScore;
+  if (tab === 'setup') return r.setup.score * 100 - r.setup.gap;
   if (tab === 'bear') return r.bearScore;
   if (tab === 'brk') return -r.brk.barsAgo * 100 + r.brk.volX;
   return r.warnScore * 1e3 + Math.log10(r.qv);
@@ -456,11 +498,13 @@ function card(r, tab) {
   let badge = '';
   if (tab === 'bull') badge = `<span class="badge bg">${r.bullScore.toFixed(1)}</span>`;
   else if (tab === 'bear') badge = `<span class="badge b5">${r.bearScore.toFixed(1)}</span>`;
+  else if (tab === 'setup') badge = `<span class="badge ${r.setup.score >= 6 ? 'bg' : ''}">${r.setup.score} 分</span>`;
   else if (tab === 'brk') badge = `<span class="badge ${r.brk.holding ? 'bg' : 'b5'}">${r.brk.volX.toFixed(1)}×</span>`;
   else if (r.warnScore >= 1) badge = `<span class="badge ${r.warnScore >= 5 ? 'b5' : r.warnScore >= 3 ? 'b3' : ''}">${r.warnScore} 分</span>`;
   let r3 = '';
   const warnTags = () => r.warns.length ? r.warns.map((x) => `<span class="tag ${x.pts >= 2 ? 'r' : 'w'}">${shortSig(x.key)}</span>`).join('') : '<span class="mut">沒有轉弱訊號</span>';
   if (tab === 'bull') r3 = `<div class="tps"><div><span>TP1</span>${fp(r.tp1, r)}</div><div><span>TP2</span>${fp(r.tp2, r)}</div><div><span>TP3</span>${fp(r.tp3, r)}</div><div><span>防守</span>${fp(r.defense, r)}</div></div>${r.flags.length ? '<div style="margin-top:4px">' + r.flags.map(([c, t]) => `<span class="tag ${c}">${t}</span>`).join('') + '</div>' : ''}`;
+  else if (tab === 'setup') r3 = `<div class="tps" style="grid-template-columns:repeat(3,1fr)"><div><span>突破位</span>${fp(r.setup.res, r)}</div><div><span>距離</span>${r.setup.gap.toFixed(1)}%</div><div><span>防守</span>${fp(r.setup.defense, r)}</div></div><div style="margin-top:4px">${r.setup.tags.map(([c, t]) => `<span class="tag ${c}">${t}</span>`).join('')}</div>`;
   else if (tab === 'brk') r3 = `突破位 <b>${fp(r.brk.level, r)}</b>　${r.brk.barsAgo === 0 ? '剛收的 K 線' : r.brk.barsAgo + ' 根前'}<br>${r.brk.holding ? '<span class="tag g">守住突破位</span>' : '<span class="tag r">跌回突破位</span>'}${r.qv < S.mainVol * 1e6 ? '<span class="tag w">小量早期</span>' : '<span class="tag">主流</span>'}`;
   else if (tab === 'bear') r3 = `壓力 EMA21 <b>${fp(r.E21, r)}</b>　24h 低 <b>${fp(r.low24, r)}</b>　RSI ${r.rsi.toFixed(0)}`;
   else r3 = warnTags() + (r.supports.length && r.warnScore ? `<div class="mut" style="margin-top:3px">支撐 ${r.supports.map((v) => fp(v, r)).join(' → ')}</div>` : '') + (tab === 'watch' && (r.isBull || r.isBear) ? `<div style="margin-top:3px">${r.isBull ? '<span class="tag g">多頭續強</span>' : '<span class="tag r">空頭續弱</span>'}</div>` : '');
@@ -478,7 +522,7 @@ function render() {
   document.body.classList.toggle('redup', !!S.redUp);
   const bt = state.byTab;
   const strongN = (bt.warn || []).filter((r) => r.warnScore >= 5).length;
-  $('tabs').innerHTML = Object.keys(TABS).map((k) => {
+  $('tabs').innerHTML = ['warn', 'setup', 'brk', 'bull', 'bear', 'watch'].map((k) => {
     const c = bt[k] ? bt[k].length : 0;
     return `<button class="${state.tab === k ? 'on' : ''}" data-tab="${k}"><svg viewBox="0 0 24 24">${IC[k]}</svg>${TABS[k][0]}${c ? `<span class="n ${k === 'warn' && strongN ? 'hot' : ''}">${c > 99 ? '99+' : c}</span>` : ''}</button>`;
   }).join('');
@@ -524,6 +568,7 @@ function openDetail(sym) {
   if (r.supports.length) h += `<div class="mut" style="margin-top:6px">下方支撐參考：${r.supports.map((v) => fp(v, r)).join(' → ')}</div>`;
   if (r.isBull) h += `<h3>多頭續強（分數 ${r.bullScore.toFixed(1)}）</h3><div class="kv"><div><span>TP1</span>${fp(r.tp1, r)}</div><div><span>TP2</span>${fp(r.tp2, r)}</div><div><span>TP3</span>${fp(r.tp3, r)}</div><div><span>防守參考</span>${fp(r.defense, r)}</div></div><div style="margin-top:6px">${r.flags.map(([c, t]) => `<span class="tag ${c}">${t}</span>`).join('')}</div>`;
   if (r.isBear) h += `<h3>空頭續弱（分數 ${r.bearScore.toFixed(1)}）</h3><div>反彈壓力 EMA21 在 ${fp(r.E21, r)}。</div>`;
+  if (r.setup) h += `<h3>值得埋伏（${r.setup.score} 分）</h3><div class="kv"><div><span>突破位（20H 高）</span>${fp(r.setup.res, r)}</div><div><span>距離</span>${r.setup.gap.toFixed(1)}%</div><div><span>防守參考</span>${fp(r.setup.defense, r)}</div><div><span>波動寬度排名</span>最窄 ${Math.round(r.setup.rank * 100)}%</div></div><div style="margin-top:6px">${r.setup.tags.map(([c, t]) => `<span class="tag ${c}">${t}</span>`).join('')}</div><div class="mut" style="margin-top:6px">放量站上突破位才算確認；收盤跌破防守位就是埋伏失敗，要停損。</div>`;
   if (r.brk) h += `<h3>放量突破</h3><div>${r.brk.barsAgo === 0 ? '剛收的' : r.brk.barsAgo + ' 根前的'} 1H K 線站上 ${fp(r.brk.level, r)}，量是平均的 ${r.brk.volX.toFixed(1)} 倍。目前${r.brk.holding ? '<span class="up">守住</span>' : '<span class="down">跌回</span>'}突破位。</div>`;
   h += `<h3>關鍵數據</h3><div class="kv">${lv.map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('')}</div>
     <div style="display:flex;gap:8px;margin-top:16px"><button class="btn" style="flex:1" data-star="${esc(r.sym)}" data-reopen="${esc(r.sym)}">${S.watchlist.includes(r.sym) ? '移出自選' : '加入自選'}</button>
@@ -541,7 +586,9 @@ function openSettings() {
     <div class="row"><label>掃描間隔</label><select id="s_interval">${[3, 5, 10, 15].map((v) => `<option value="${v}" ${S.interval === v ? 'selected' : ''}>${v} 分鐘</option>`).join('')}</select></div>
     <div class="row"><label>下跌通知門檻<small>自選幣 3 分就會通知</small></label><select id="s_alertMin">${[[4, '4 分（敏感）'], [5, '5 分（建議）'], [6, '6 分（只看強訊號）']].map(([v, t]) => `<option value="${v}" ${S.alertMin === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     <div class="row"><label>轉弱／下跌警示通知</label>${sw('s_notifyDrop', S.notifyDrop)}</div>
-    <div class="row"><label>放量突破通知</label>${sw('s_notifyBreakout', S.notifyBreakout)}</div>
+    <div class="row"><label>放量突破通知<small>剛收的 1H K 線放量站上 20H 高點</small></label>${sw('s_notifyBreakout', S.notifyBreakout)}</div>
+    <div class="row"><label>值得埋伏通知</label>${sw('s_notifySetup', S.notifySetup)}</div>
+    <div class="row"><label>埋伏通知門檻</label><select id="s_setupMin">${[[5, '5 分（較多）'], [6, '6 分（建議）'], [7, '7 分（只看最漂亮的）']].map(([v, t]) => `<option value="${v}" ${S.setupMin === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     <div class="row"><label>提示音和震動</label>${sw('s_sound', S.sound)}</div>
     <div class="row"><label>保持螢幕常亮<small>App 開著時螢幕不會自動關，就能一直掃描</small></label>${sw('s_wake', S.wake)}</div>
     <div class="row"><label>包含股票、商品合約<small>例如 NVDA、黃金；美股休市時波動和量會變小</small></label>${sw('s_tradfi', S.tradfi)}</div>
@@ -558,7 +605,8 @@ function readSettings() {
   S.mainVol = Math.max(1, +$('s_mainVol').value || DEFAULTS.mainVol);
   S.watchVol = Math.max(0.5, +$('s_watchVol').value || DEFAULTS.watchVol);
   S.interval = +$('s_interval').value; S.alertMin = +$('s_alertMin').value;
-  for (const k of ['notifyDrop', 'notifyBreakout', 'sound', 'wake', 'redUp', 'tradfi']) S[k] = $('s_' + k).checked;
+  S.setupMin = +$('s_setupMin').value;
+  for (const k of ['notifyDrop', 'notifyBreakout', 'notifySetup', 'sound', 'wake', 'redUp', 'tradfi']) S[k] = $('s_' + k).checked;
   S.tgToken = $('s_tgToken').value.trim(); S.tgChat = $('s_tgChat').value.trim();
 }
 function openLog() {
