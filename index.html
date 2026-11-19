@@ -237,7 +237,8 @@ function analyze(t, k, fund) {
     sym: t.symbol, base: (state.info.get(t.symbol) || {}).base || t.symbol.replace(/USDT$/, ''), kind: (state.info.get(t.symbol) || {}).kind || '',
     p, qv: +t.quoteVolume, c24: +t.priceChangePercent, c12: chg(12), c4: chg(4), c1: chg(1),
     high24: +t.highPrice, low24: +t.lowPrice, fund: fund ?? null,
-    E9: e9[n - 1], E21: e21[n - 1], E55: e55[n - 1], rsi: R[n - 1], atr: A, atrPct: A / p * 100,
+    E9: e9[n - 1], E21: e21[n - 1], E55: e55[n - 1], // 訊號用：只算已收完的 K 線，避免盤中跳來跳去
+    E21L: ema(closes.concat([p]), 21).at(-1), E55L: ema(closes.concat([p]), 55).at(-1), // 顯示用：含目前這根，跟幣安圖表一樣 rsi: R[n - 1], atr: A, atrPct: A / p * 100,
     warns: [], flags: [], oi4: null
   };
   const avgWin = done.slice(Math.max(0, n - 24), n - 4);
@@ -264,7 +265,7 @@ function analyze(t, k, fund) {
     if (r.rsi >= 75) r.flags.push(['w', 'RSI 超買']);
     r.bullScore = sc;
     r.tp1 = p + A; r.tp2 = Math.max(p + 2 * A, r.high24 > p * 1.005 ? r.high24 : 0); r.tp3 = Math.max(r.tp2 + 1.5 * A, p + 3.5 * A);
-    const d = Math.max(r.E21, r.swingLow); r.defense = d < p ? d : r.swingLow;
+    const d = Math.max(r.E21L, r.swingLow); r.defense = d < p ? d : r.swingLow;
   }
 
   r.isBear = r.qv >= S.mainVol * 1e6 && r.c24 < 0 && r.c12 < 0 && r.c4 < 0 && r.c1 < 0 && r.E9 < r.E21 && r.E21 < r.E55 && last.c < r.E21;
@@ -292,7 +293,7 @@ function analyze(t, k, fund) {
   if (last.c < last.o && last.o - last.c >= 1.2 * A && r.lastVolRatio >= 2) W(2, `放量長黑 K（量 ${r.lastVolRatio.toFixed(1)} 倍）`, 'red');
   if (r.brk && !r.brk.holding && p < r.brk.level * 0.995) W(2, '放量突破後又跌回突破位（假突破）', 'fake');
   r.warnScore = sum(r.warns.map((w) => w.pts));
-  r.supports = [r.E21, r.E55, r.swingLow, r.low24].filter((v) => isFinite(v) && v < p * 0.998).sort((a, b) => b - a).slice(0, 2);
+  r.supports = [r.E21L, r.E55L, r.swingLow, r.low24].filter((v) => isFinite(v) && v < p * 0.998).sort((a, b) => b - a).slice(0, 2);
 
   /* ---- 值得埋伏：波動收斂、貼近壓力、趨勢沒壞、還沒噴 ---- */
   if (n >= 80) {
@@ -318,7 +319,7 @@ function analyze(t, k, fund) {
       if (r.volRatio4 < 0.8) { sc += 1; tags.push(['', '量縮整理']); }
       if (r.fund != null && r.fund < 0) { sc += 1; tags.push(['g', '負費率（空方付費）']); }
       if (r.E9 > r.E21 && r.E21 > r.E55) { sc += 1; tags.push(['g', '均線多頭排列']); }
-      r.setup = { res, gap, defense: Math.max(rangeLow, r.E55) < p ? Math.max(rangeLow, r.E55) : rangeLow, score: sc, tags, rank };
+      r.setup = { res, gap, defense: Math.max(rangeLow, r.E55L) < p ? Math.max(rangeLow, r.E55L) : rangeLow, score: sc, tags, rank };
     }
   }
   return r;
@@ -349,7 +350,7 @@ async function scan() {
     const universe = tick.filter((t) => state.info.has(t.symbol) && ((+t.quoteVolume >= S.watchVol * 1e6 && (S.tradfi || !state.info.get(t.symbol).kind)) || S.watchlist.includes(t.symbol)));
     let done = 0;
     const rows = await pool(universe, 8, async (t) => {
-      const k = await getJSON(`/fapi/v1/klines?symbol=${t.symbol}&interval=1h&limit=99`);
+      const k = await getJSON(`/fapi/v1/klines?symbol=${t.symbol}&interval=1h&limit=300`);
       done++; setProgress(0.05 + 0.8 * done / universe.length);
       if (done % 10 === 0) setStatus(`掃描中… ${done}/${universe.length}`);
       return analyze(t, k, fund.get(t.symbol));
@@ -498,7 +499,7 @@ function card(r, tab) {
   if (tab === 'bull') r3 = `<div class="tps"><div><span>TP1</span>${fp(r.tp1, r)}</div><div><span>TP2</span>${fp(r.tp2, r)}</div><div><span>TP3</span>${fp(r.tp3, r)}</div><div><span>防守</span>${fp(r.defense, r)}</div></div>${r.flags.length ? '<div style="margin-top:4px">' + r.flags.map(([c, t]) => `<span class="tag ${c}">${t}</span>`).join('') + '</div>' : ''}`;
   else if (tab === 'setup') r3 = `<div class="tps" style="grid-template-columns:repeat(3,1fr)"><div><span>突破位</span>${fp(r.setup.res, r)}</div><div><span>距離</span>${r.setup.gap.toFixed(1)}%</div><div><span>防守</span>${fp(r.setup.defense, r)}</div></div><div style="margin-top:4px">${r.setup.tags.map(([c, t]) => `<span class="tag ${c}">${t}</span>`).join('')}</div>`;
   else if (tab === 'brk') r3 = `突破位 <b>${fp(r.brk.level, r)}</b>　${r.brk.barsAgo === 0 ? '剛收的 K 線' : r.brk.barsAgo + ' 根前'}<br>${r.brk.holding ? '<span class="tag g">守住突破位</span>' : '<span class="tag r">跌回突破位</span>'}${r.qv < S.mainVol * 1e6 ? '<span class="tag w">小量早期</span>' : '<span class="tag">主流</span>'}`;
-  else if (tab === 'bear') r3 = `壓力 EMA21 <b>${fp(r.E21, r)}</b>　24h 低 <b>${fp(r.low24, r)}</b>　RSI ${r.rsi.toFixed(0)}`;
+  else if (tab === 'bear') r3 = `壓力 1H EMA21 <b>${fp(r.E21L, r)}</b>　24h 低 <b>${fp(r.low24, r)}</b>　RSI ${r.rsi.toFixed(0)}`;
   else r3 = warnTags() + (r.supports.length && r.warnScore ? `<div class="mut" style="margin-top:3px">支撐 ${r.supports.map((v) => fp(v, r)).join(' → ')}</div>` : '') + (tab === 'watch' && (r.isBull || r.isBear) ? `<div style="margin-top:3px">${r.isBull ? '<span class="tag g">多頭續強</span>' : '<span class="tag r">空頭續弱</span>'}</div>` : '');
   return `<div class="coin ${tab === 'warn' && r.warnScore >= 5 ? 'hot' : ''}" data-sym="${esc(r.sym)}">
     <div class="r1"><button class="star ${w ? 'on' : ''}" data-star="${esc(r.sym)}" aria-label="自選">${w ? '★' : '☆'}</button><span class="sym">${esc(r.base)}</span>${r.kind ? `<span class="tag">${r.kind}</span>` : ''}${badge}
@@ -565,7 +566,7 @@ function closeSheet() { if (!state.sheet) return; if (history.state && history.s
 
 function openDetail(sym) {
   const r = state.results.find((x) => x.sym === sym); if (!r) return;
-  const lv = [['現價', fp(r.p, r)], ['EMA21', fp(r.E21, r)], ['EMA55', fp(r.E55, r)], ['24h 高', fp(r.high24, r)], ['24h 低', fp(r.low24, r)], ['近 6H 低點', fp(r.swingLow, r)],
+  const lv = [['現價', fp(r.p, r)], ['1H EMA21', fp(r.E21L, r)], ['1H EMA55', fp(r.E55L, r)], ['24h 高', fp(r.high24, r)], ['24h 低', fp(r.low24, r)], ['近 6H 低點', fp(r.swingLow, r)],
     ['RSI(14)', r.rsi.toFixed(0)], ['ATR(1H)', r.atrPct.toFixed(2) + '%'], ['4H 量比', r.volRatio4.toFixed(2) + '×'], ['持倉量 4h', r.oi4 == null ? '—' : pct(r.oi4)]];
   let h = `<button class="x" data-closesheet="1">×</button><h2>${esc(r.base)} <span class="mut" style="font-size:13px">${esc(r.sym)}</span>${r.kind ? ` <span class="tag">${r.kind}</span>` : ''}</h2>
     <div>${fp(r.p, r)}　${pct(r.c24)} 24h　${pct(r.c1)} 1h　費率 ${fr(r.fund)}</div>
@@ -573,7 +574,7 @@ function openDetail(sym) {
   h += r.warns.length ? r.warns.map((w) => `<div class="sig"><span>${esc(w.text)}</span><b class="${w.pts >= 2 ? 'lvl5' : 'lvl3'}">+${w.pts}</b></div>`).join('') : '<div class="mut">目前沒有轉弱訊號。</div>';
   if (r.supports.length) h += `<div class="mut" style="margin-top:6px">下方支撐參考：${r.supports.map((v) => fp(v, r)).join(' → ')}</div>`;
   if (r.isBull) h += `<h3>多頭續強（分數 ${r.bullScore.toFixed(1)}）</h3><div class="kv"><div><span>TP1</span>${fp(r.tp1, r)}</div><div><span>TP2</span>${fp(r.tp2, r)}</div><div><span>TP3</span>${fp(r.tp3, r)}</div><div><span>防守參考</span>${fp(r.defense, r)}</div></div><div style="margin-top:6px">${r.flags.map(([c, t]) => `<span class="tag ${c}">${t}</span>`).join('')}</div>`;
-  if (r.isBear) h += `<h3>空頭續弱（分數 ${r.bearScore.toFixed(1)}）</h3><div>反彈壓力 EMA21 在 ${fp(r.E21, r)}。</div>`;
+  if (r.isBear) h += `<h3>空頭續弱（分數 ${r.bearScore.toFixed(1)}）</h3><div>反彈壓力 1H EMA21 在 ${fp(r.E21L, r)}。</div>`;
   if (r.setup) h += `<h3>值得埋伏（${r.setup.score} 分）</h3><div class="kv"><div><span>突破位（20H 高）</span>${fp(r.setup.res, r)}</div><div><span>距離</span>${r.setup.gap.toFixed(1)}%</div><div><span>防守參考</span>${fp(r.setup.defense, r)}</div><div><span>波動寬度排名</span>最窄 ${Math.round(r.setup.rank * 100)}%</div></div><div style="margin-top:6px">${r.setup.tags.map(([c, t]) => `<span class="tag ${c}">${t}</span>`).join('')}</div><div class="mut" style="margin-top:6px">放量站上突破位才算確認；收盤跌破防守位就是埋伏失敗，要停損。</div>`;
   if (r.brk) h += `<h3>放量突破</h3><div>${r.brk.barsAgo === 0 ? '剛收的' : r.brk.barsAgo + ' 根前的'} 1H K 線站上 ${fp(r.brk.level, r)}，量是平均的 ${r.brk.volX.toFixed(1)} 倍。目前${r.brk.holding ? '<span class="up">守住</span>' : '<span class="down">跌回</span>'}突破位。</div>`;
   h += `<h3>關鍵數據</h3><div class="kv">${lv.map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('')}</div>
