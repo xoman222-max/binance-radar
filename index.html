@@ -237,8 +237,10 @@ function analyze(t, k, fund) {
     sym: t.symbol, base: (state.info.get(t.symbol) || {}).base || t.symbol.replace(/USDT$/, ''), kind: (state.info.get(t.symbol) || {}).kind || '',
     p, qv: +t.quoteVolume, c24: +t.priceChangePercent, c12: chg(12), c4: chg(4), c1: chg(1),
     high24: +t.highPrice, low24: +t.lowPrice, fund: fund ?? null,
-    E9: e9[n - 1], E21: e21[n - 1], E55: e55[n - 1], // 訊號用：只算已收完的 K 線，避免盤中跳來跳去
-    E21L: ema(closes.concat([p]), 21).at(-1), E55L: ema(closes.concat([p]), 55).at(-1), // 顯示用：含目前這根，跟幣安圖表一樣 rsi: R[n - 1], atr: A, atrPct: A / p * 100,
+    // E21/E55 給訊號用（只算已收完的 K 線）；E21L/E55L 給畫面顯示用（含目前這根，跟幣安圖表一樣）
+    E9: e9[n - 1], E21: e21[n - 1], E55: e55[n - 1],
+    E21L: ema(closes.concat([p]), 21).at(-1), E55L: ema(closes.concat([p]), 55).at(-1),
+    rsi: R[n - 1], atr: A, atrPct: A / p * 100,
     warns: [], flags: [], oi4: null
   };
   const avgWin = done.slice(Math.max(0, n - 24), n - 4);
