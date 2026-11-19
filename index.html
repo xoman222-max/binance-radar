@@ -143,7 +143,7 @@ nav.tabs .n.hot{background:var(--strong);color:#fff}
 <script>
 'use strict';
 const API = 'https://fapi.binance.com';
-const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: false, sound: true, redUp: false, wake: false, tgToken: '', tgChat: '', watchlist: [] };
+const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: false, sound: true, redUp: false, wake: false, tradfi: true, tgToken: '', tgChat: '', watchlist: [] };
 function loadSettings() { try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('bnRadarSettings') || '{}')); } catch (e) { return Object.assign({}, DEFAULTS); } }
 function saveSettings() { try { localStorage.setItem('bnRadarSettings', JSON.stringify(S)); } catch (e) {} }
 let S = loadSettings();
@@ -206,17 +206,19 @@ async function loadExchangeInfo() {
   const j = await getJSON('/fapi/v1/exchangeInfo');
   const m = new Map();
   for (const s of j.symbols) {
-    if (s.contractType !== 'PERPETUAL' || s.quoteAsset !== 'USDT' || s.status !== 'TRADING') continue;
-    if (s.underlyingType && s.underlyingType !== 'COIN') continue; // 排除股票、指數、商品類合約
+    // 幣安的股票、商品合約可能用 TRADIFI_PERPETUAL 這類合約型態，所以只要是永續都收
+    if (!/PERPETUAL/.test(s.contractType || '') || s.quoteAsset !== 'USDT' || s.status !== 'TRADING') continue;
+    const ut = s.underlyingType || 'COIN';
+    const kind = ut === 'COIN' && s.contractType === 'PERPETUAL' ? '' : ({ EQUITY: '股票', STOCK: '股票', COMMODITY: '商品', INDEX: '指數' }[ut] || '傳統金融');
     const pf = (s.filters || []).find((f) => f.filterType === 'PRICE_FILTER');
-    m.set(s.symbol, { base: s.baseAsset, tick: pf ? +pf.tickSize : 0.0001, dec: tickDec(pf ? pf.tickSize : '0.0001') });
+    m.set(s.symbol, { base: s.baseAsset, kind, tick: pf ? +pf.tickSize : 0.0001, dec: tickDec(pf ? pf.tickSize : '0.0001') });
   }
   state.info = m; state.infoAt = Date.now();
 }
 
 /* ---------- 分析 ---------- */
 function analyze(t, k, fund) {
-  if (!k || k.length < 70) return null;
+  if (!k || k.length < 30) return null; // 新上架的合約 K 線較少，EMA55 相關訊號會自動略過
   const bars = k.map((b) => ({ t: +b[0], o: +b[1], h: +b[2], l: +b[3], c: +b[4], qv: +b[7] }));
   const cur = bars[bars.length - 1];
   const done = bars.slice(0, -1); // 已收完的 1H K
@@ -230,20 +232,21 @@ function analyze(t, k, fund) {
   const elapsed = Date.now() - cur.t;
   const chg = (N) => { const i = bars.length - 1 - N; if (i < 0) return null; const base = elapsed >= 30 * 60e3 ? bars[i].c : bars[i].o; return (p / base - 1) * 100; };
   const r = {
-    sym: t.symbol, base: (state.info.get(t.symbol) || {}).base || t.symbol.replace(/USDT$/, ''),
+    sym: t.symbol, base: (state.info.get(t.symbol) || {}).base || t.symbol.replace(/USDT$/, ''), kind: (state.info.get(t.symbol) || {}).kind || '',
     p, qv: +t.quoteVolume, c24: +t.priceChangePercent, c12: chg(12), c4: chg(4), c1: chg(1),
     high24: +t.highPrice, low24: +t.lowPrice, fund: fund ?? null,
     E9: e9[n - 1], E21: e21[n - 1], E55: e55[n - 1], rsi: R[n - 1], atr: A, atrPct: A / p * 100,
     warns: [], flags: [], oi4: null
   };
-  const avgH = sum(done.slice(n - 24, n - 4).map((b) => b.qv)) / 20 || 1;
+  const avgWin = done.slice(Math.max(0, n - 24), n - 4);
+  const avgH = sum(avgWin.map((b) => b.qv)) / (avgWin.length || 1) || 1;
   r.volRatio4 = sum(done.slice(n - 4).map((b) => b.qv)) / (avgH * 4);
   r.lastVolRatio = last.qv / avgH;
   const high12 = Math.max(...bars.slice(-12).map((b) => b.h));
   r.swingLow = Math.min(...done.slice(-6).map((b) => b.l));
   r.ext = (p - r.E21) / A;
 
-  for (let j = n - 1; j >= n - 3; j--) {
+  for (let j = n - 1; j >= n - 3 && j >= 20; j--) {
     const lvl = Math.max(...done.slice(j - 20, j).map((b) => b.h));
     if (done[j].c > lvl && done[j].qv >= 1.8 * avgH) { r.brk = { level: lvl, barsAgo: n - 1 - j, volX: done[j].qv / avgH, holding: p >= lvl }; break; }
   }
@@ -312,7 +315,7 @@ async function scan() {
     if (!state.info.size || Date.now() - state.infoAt > 6 * 3600e3) await loadExchangeInfo();
     const [tick, prem] = await Promise.all([getJSON('/fapi/v1/ticker/24hr'), getJSON('/fapi/v1/premiumIndex')]);
     const fund = new Map(prem.map((x) => [x.symbol, +x.lastFundingRate]));
-    const universe = tick.filter((t) => state.info.has(t.symbol) && (+t.quoteVolume >= S.watchVol * 1e6 || S.watchlist.includes(t.symbol)));
+    const universe = tick.filter((t) => state.info.has(t.symbol) && ((+t.quoteVolume >= S.watchVol * 1e6 && (S.tradfi || !state.info.get(t.symbol).kind)) || S.watchlist.includes(t.symbol)));
     let done = 0;
     const rows = await pool(universe, 8, async (t) => {
       const k = await getJSON(`/fapi/v1/klines?symbol=${t.symbol}&interval=1h&limit=99`);
@@ -462,7 +465,7 @@ function card(r, tab) {
   else if (tab === 'bear') r3 = `壓力 EMA21 <b>${fp(r.E21, r)}</b>　24h 低 <b>${fp(r.low24, r)}</b>　RSI ${r.rsi.toFixed(0)}`;
   else r3 = warnTags() + (r.supports.length && r.warnScore ? `<div class="mut" style="margin-top:3px">支撐 ${r.supports.map((v) => fp(v, r)).join(' → ')}</div>` : '') + (tab === 'watch' && (r.isBull || r.isBear) ? `<div style="margin-top:3px">${r.isBull ? '<span class="tag g">多頭續強</span>' : '<span class="tag r">空頭續弱</span>'}</div>` : '');
   return `<div class="coin ${tab === 'warn' && r.warnScore >= 5 ? 'hot' : ''}" data-sym="${esc(r.sym)}">
-    <div class="r1"><button class="star ${w ? 'on' : ''}" data-star="${esc(r.sym)}" aria-label="自選">${w ? '★' : '☆'}</button><span class="sym">${esc(r.base)}</span>${badge}
+    <div class="r1"><button class="star ${w ? 'on' : ''}" data-star="${esc(r.sym)}" aria-label="自選">${w ? '★' : '☆'}</button><span class="sym">${esc(r.base)}</span>${r.kind ? `<span class="tag">${r.kind}</span>` : ''}${badge}
       <div class="px"><div class="p">${fp(r.p, r)}</div><div class="c">${pct(r.c24)}</div></div></div>
     <div class="r2"><span>12h ${pct(r.c12)}</span><span>4h ${pct(r.c4)}</span><span>1h ${pct(r.c1)}</span><span>量 <b>${vol(r.qv)}</b></span><span>費率 ${fr(r.fund)}</span></div>
     <div class="r3">${r3}</div></div>`;
@@ -514,7 +517,7 @@ function openDetail(sym) {
   const r = state.results.find((x) => x.sym === sym); if (!r) return;
   const lv = [['現價', fp(r.p, r)], ['EMA21', fp(r.E21, r)], ['EMA55', fp(r.E55, r)], ['24h 高', fp(r.high24, r)], ['24h 低', fp(r.low24, r)], ['近 6H 低點', fp(r.swingLow, r)],
     ['RSI(14)', r.rsi.toFixed(0)], ['ATR(1H)', r.atrPct.toFixed(2) + '%'], ['4H 量比', r.volRatio4.toFixed(2) + '×'], ['持倉量 4h', r.oi4 == null ? '—' : pct(r.oi4)]];
-  let h = `<button class="x" data-closesheet="1">×</button><h2>${esc(r.base)} <span class="mut" style="font-size:13px">${esc(r.sym)}</span></h2>
+  let h = `<button class="x" data-closesheet="1">×</button><h2>${esc(r.base)} <span class="mut" style="font-size:13px">${esc(r.sym)}</span>${r.kind ? ` <span class="tag">${r.kind}</span>` : ''}</h2>
     <div>${fp(r.p, r)}　${pct(r.c24)} 24h　${pct(r.c1)} 1h　費率 ${fr(r.fund)}</div>
     <h3>轉弱訊號（${r.warnScore} 分）</h3>`;
   h += r.warns.length ? r.warns.map((w) => `<div class="sig"><span>${esc(w.text)}</span><b class="${w.pts >= 2 ? 'lvl5' : 'lvl3'}">+${w.pts}</b></div>`).join('') : '<div class="mut">目前沒有轉弱訊號。</div>';
@@ -541,6 +544,7 @@ function openSettings() {
     <div class="row"><label>放量突破通知</label>${sw('s_notifyBreakout', S.notifyBreakout)}</div>
     <div class="row"><label>提示音和震動</label>${sw('s_sound', S.sound)}</div>
     <div class="row"><label>保持螢幕常亮<small>App 開著時螢幕不會自動關，就能一直掃描</small></label>${sw('s_wake', S.wake)}</div>
+    <div class="row"><label>包含股票、商品合約<small>例如 NVDA、黃金；美股休市時波動和量會變小</small></label>${sw('s_tradfi', S.tradfi)}</div>
     <div class="row"><label>紅漲綠跌</label>${sw('s_redUp', S.redUp)}</div>
     <div class="row"><label>系統通知<small>${nText}</small></label><button class="btn" id="notifBtn" ${np === 'default' ? '' : 'disabled'}>開啟</button></div>
     <div class="row"><label>Telegram Bot Token<small>選填，填了就會同時推到 Telegram</small></label><input type="text" id="s_tgToken" value="${esc(S.tgToken)}" placeholder="123456:ABC..." autocomplete="off"></div>
@@ -554,7 +558,7 @@ function readSettings() {
   S.mainVol = Math.max(1, +$('s_mainVol').value || DEFAULTS.mainVol);
   S.watchVol = Math.max(0.5, +$('s_watchVol').value || DEFAULTS.watchVol);
   S.interval = +$('s_interval').value; S.alertMin = +$('s_alertMin').value;
-  for (const k of ['notifyDrop', 'notifyBreakout', 'sound', 'wake', 'redUp']) S[k] = $('s_' + k).checked;
+  for (const k of ['notifyDrop', 'notifyBreakout', 'sound', 'wake', 'redUp', 'tradfi']) S[k] = $('s_' + k).checked;
   S.tgToken = $('s_tgToken').value.trim(); S.tgChat = $('s_tgChat').value.trim();
 }
 function openLog() {
