@@ -1,5 +1,5 @@
 // 只快取 App 本身的檔案；幣安行情一律走網路，不快取
-const CACHE = 'radar-v5';
+const CACHE = 'radar-v6';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-180.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener('activate', (e) => {

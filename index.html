@@ -418,13 +418,16 @@ function handleAlerts() {
 }
 function fmtShort(r) { return `${fp(r.p, r)}｜24h ${r.c24 > 0 ? '+' : ''}${r.c24.toFixed(1)}%｜1h ${(r.c1 ?? 0) > 0 ? '+' : ''}${(r.c1 ?? 0).toFixed(1)}%`; }
 
-function notify(kind, title, body) {
-  state.log.unshift({ t: Date.now(), title, body }); state.log = state.log.slice(0, 200);
+function toast(kind, title, body, ms = 10000) {
   const el = document.createElement('div'); el.className = 'toast ' + kind;
   el.innerHTML = `<b>${esc(title)}</b>${esc(body).replace(/\n/g, '<br>')}`;
   el.onclick = () => el.remove();
-  $('toasts').prepend(el); setTimeout(() => el.remove(), 10000);
+  $('toasts').prepend(el); setTimeout(() => el.remove(), ms);
   while ($('toasts').children.length > 3) $('toasts').lastChild.remove();
+}
+function notify(kind, title, body) {
+  state.log.unshift({ t: Date.now(), title, body }); state.log = state.log.slice(0, 200);
+  toast(kind, title, body);
   sysNotify(title, body);
   tgSend(`${title}\n${body}`);
 }
@@ -539,12 +542,26 @@ function renderStrip() {
 }
 
 /* ---------- 底部面板 ---------- */
+/* 手機返回鍵：先關面板、再回到第一個分頁，最後要連按兩次才離開 */
+let backArmed = false;
+function pushGuard() { try { history.pushState({ g: 1 }, ''); } catch (e) {} }
+window.addEventListener('popstate', () => {
+  if (state.sheet) { hideSheet(); return; }
+  if (state.tab !== 'warn') { setTab('warn'); pushGuard(); return; }
+  if (!backArmed) {
+    backArmed = true;
+    toast('', '再按一次返回鍵離開雷達', '', 2000);
+    setTimeout(() => { if (backArmed) { backArmed = false; pushGuard(); } }, 2000);
+  }
+});
 function openSheet(html, name) {
+  if (!state.sheet) { try { history.pushState({ sheet: 1 }, ''); } catch (e) {} }
   $('sheet').innerHTML = '<div class="grab"></div>' + html;
   $('sheet').classList.add('open'); $('sheetBg').classList.add('open'); state.sheet = name;
   $('sheet').scrollTop = 0;
 }
-function closeSheet() { $('sheet').classList.remove('open'); $('sheetBg').classList.remove('open'); state.sheet = null; }
+function hideSheet() { $('sheet').classList.remove('open'); $('sheetBg').classList.remove('open'); state.sheet = null; }
+function closeSheet() { if (!state.sheet) return; if (history.state && history.state.sheet) history.back(); else hideSheet(); }
 
 function openDetail(sym) {
   const r = state.results.find((x) => x.sym === sym); if (!r) return;
@@ -663,6 +680,7 @@ if (isIOS() && !isStandalone()) {
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').then((reg) => { state.swReg = reg; }).catch(() => {});
 }
+pushGuard();
 setInterval(tickStatus, 1000);
 applyWake();
 render();
