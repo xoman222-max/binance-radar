@@ -182,14 +182,15 @@ nav.tabs .n.hot{background:var(--strong);color:#fff}
 <script>
 'use strict';
 const API = 'https://fapi.binance.com';
-const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: true, notifySetup: true, setupMin: 6, notifyDump: true, dumpPct: 5, notifyNews: true, notifyNewsAll: false, ver: 5,  redUp: false, wake: false, tradfi: true, tgToken: '', tgChat: '', watchlist: [] };
+const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: true, notifySetup: true, setupMin: 6, notifyDump: true, dumpPct: 5, notifyNews: true, notifyNewsAll: false, notifyMacro: true, ver: 6,  redUp: false, wake: false, tradfi: true, tgToken: '', tgChat: '', watchlist: [] };
 function loadSettings() { try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('bnRadarSettings') || '{}')); } catch (e) { return Object.assign({}, DEFAULTS); } }
 function saveSettings() { try { localStorage.setItem('bnRadarSettings', JSON.stringify(S)); } catch (e) {} }
 let S = loadSettings();
 if ((S.ver || 1) < 2) { S.notifyBreakout = true; S.notifySetup = true; } // 舊版設定：突破和埋伏通知預設改成開啟
 if ((S.ver || 1) < 3) { delete S.sound; delete S.vibrate; } // 已移除提示音和震動
 if ((S.ver || 1) < 4) { S.notifyDump = true; S.dumpPct = 5; } // 新增急跌通知
-if ((S.ver || 1) < 5) { S.notifyNews = true; S.notifyNewsAll = false; S.ver = 5; saveSettings(); } // 新增快訊
+if ((S.ver || 1) < 5) { S.notifyNews = true; S.notifyNewsAll = false; } // 新增快訊
+if ((S.ver || 1) < 6) { S.notifyMacro = true; S.ver = 6; saveSettings(); } // 新增經濟數據通知
 
 const state = { info: new Map(), infoAt: 0, results: [], universe: [], byTab: {}, lastScan: 0, nextScan: 0, scanning: false,
   firstDone: false, alerted: new Map(), log: [], tab: 'warn', sort: 'score', timer: null, sheet: null, swReg: null, wakeLock: null };
@@ -768,6 +769,7 @@ function openSettings() {
     <div class="row"><label>急跌通知<small>不用等 K 線收盤，從近 1～2 小時高點跌超過門檻就通知</small></label>${sw('s_notifyDump', S.notifyDump)}</div>
     <div class="row"><label>急跌門檻</label><select id="s_dumpPct">${[3, 5, 8, 12].map((v) => `<option value="${v}" ${S.dumpPct === v ? 'selected' : ''}>${v}%</option>`).join('')}</select></div>
     <div class="row"><label>放量突破通知<small>剛收的 1H K 線放量站上 20H 高點</small></label>${sw('s_notifyBreakout', S.notifyBreakout)}</div>
+    <div class="row"><label>經濟數據、央行通知<small>失業率、非農、CPI、PCE、GDP、利率決議、鮑威爾講話等公布時通知</small></label>${sw('s_notifyMacro', S.notifyMacro)}</div>
     <div class="row"><label>自選幣快訊通知<small>有新聞提到你的自選幣就通知</small></label>${sw('s_notifyNews', S.notifyNews)}</div>
     <div class="row"><label>主頻道所有快訊通知<small>方程式新聞主頻道每則都通知，量很多</small></label>${sw('s_notifyNewsAll', S.notifyNewsAll)}</div>
     <div class="row"><label>值得埋伏通知</label>${sw('s_notifySetup', S.notifySetup)}</div>
@@ -789,7 +791,7 @@ function readSettings() {
   S.watchVol = Math.max(0.5, +$('s_watchVol').value || DEFAULTS.watchVol);
   S.interval = +$('s_interval').value; S.alertMin = +$('s_alertMin').value;
   S.setupMin = +$('s_setupMin').value; S.dumpPct = +$('s_dumpPct').value;
-  for (const k of ['notifyDrop', 'notifyDump', 'notifyBreakout', 'notifySetup', 'notifyNews', 'notifyNewsAll', 'wake', 'redUp', 'tradfi']) S[k] = $('s_' + k).checked;
+  for (const k of ['notifyDrop', 'notifyDump', 'notifyBreakout', 'notifySetup', 'notifyNews', 'notifyNewsAll', 'notifyMacro', 'wake', 'redUp', 'tradfi']) S[k] = $('s_' + k).checked;
   S.tgToken = $('s_tgToken').value.trim(); S.tgChat = $('s_tgChat').value.trim();
 }
 function openLog() {
@@ -873,7 +875,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
 }
 /* ---------- 加密快訊：方程式新聞 EquationNews 公開 API（免 key，支援跨網域） ---------- */
 const NEWS_API = 'https://api.eqn.news/public/v1';
-const NEWS_CH = [['all', '全部'], ['main', '主頻道'], ['binance', '幣安公告'], ['pricechange', '價格異動'], ['oi', 'OI 異動'], ['major', '大幅波動'], ['tier2', '二線上新'], ['alpha', '幣安 Alpha'], ['korea', '韓所'], ['hl', 'Hyperliquid'], ['tradfi', '財經'], ['tfmoves', '美股']];
+const NEWS_CH = [['all', '全部'], ['__macro', '總經數據'], ['main', '主頻道'], ['binance', '幣安公告'], ['pricechange', '價格異動'], ['oi', 'OI 異動'], ['major', '大幅波動'], ['tier2', '二線上新'], ['alpha', '幣安 Alpha'], ['korea', '韓所'], ['hl', 'Hyperliquid'], ['tradfi', '財經'], ['tfmoves', '美股']];
 Object.assign(state, { newsCh: 'all', newsOnlyWatch: false, newsItems: [], newsCursor: null, newsLoading: false, newsOpen: new Set(),
   feed: [], feedEtag: null, newsUnread: 0, coinNews: new Map() });
 try { state.newsLastNo = +localStorage.getItem('bnRadarNewsNo') || 0; } catch (e) { state.newsLastNo = 0; }
@@ -896,6 +898,16 @@ function newsParts(it) {
   return { title: tc(title), body: tc(body) };
 }
 const coinKey = (c) => String(c || '').toUpperCase().replace(/USDT$/, '').replace(/^(1000000|1000|1M)(?=[A-Z])/, '');
+/* 會影響行情的總經數據、央行決議（比對原文：簡體、英文都看） */
+const MACRO_DATA = /失业率|失業率|非农|非農|初请|初請|CPI|PPI|PCE|GDP|零售销售|零售銷售|ISM|PMI|ADP|JOLTS|职位空缺|職位空缺|nonfarm|unemployment|jobless|retail sales/i;
+const MACRO_RESULT = /预期|預期|前值|公布|公佈|录得|錄得|expected|forecast|previous|prior|%/i;
+const MACRO_CB = /利率决议|利率決議|议息|議息|FOMC|降息|加息|升息|维持利率|維持利率|鲍威尔|鮑威爾|Powell|rate decision|rate cut|rate hike/i;
+function macroOf(it) {
+  const raw = txt(it.zh) + ' ' + txt(it.en);
+  if (MACRO_CB.test(raw)) return '央行';
+  if (MACRO_DATA.test(raw) && MACRO_RESULT.test(raw)) return '經濟數據';
+  return null;
+}
 function newsTime(it) { const t = Date.parse(it.time); return isFinite(t) ? t : Date.now(); }
 function agoStr(t) { const m = Math.max(0, Math.round((Date.now() - t) / 60e3)); return m < 1 ? '剛剛' : m < 60 ? `${m} 分前` : m < 1440 ? `${Math.floor(m / 60)} 小時前` : `${Math.floor(m / 1440)} 天前`; }
 function aiHtml(ai) {
@@ -917,7 +929,7 @@ function newsHtml(it, compact) {
   const open = compact || state.newsOpen.has(String(it.no));
   return `<div class="news ${open ? 'open' : ''} ${Date.now() - t < 15 * 60e3 ? 'fresh' : ''}" data-no="${esc(it.no)}">
     <div class="nh"><span>${agoStr(t)}・${new Date(t).toLocaleTimeString('zh-TW', { hour12: false, hour: '2-digit', minute: '2-digit' })}</span><span class="ns">${esc(it.source || '')}</span></div>
-    <div class="ntl">${esc(title)}</div>${coins ? `<div style="margin-top:4px">${coins}</div>` : ''}
+    <div class="ntl">${macroOf(it) ? `<span class="tag r">${macroOf(it)}</span>` : ''}${esc(title)}</div>${coins ? `<div style="margin-top:4px">${coins}</div>` : ''}
     <div class="nbody">${body ? esc(body) : ''}${aiHtml(it.ai)}${link}</div></div>`;
 }
 async function newsGet(params) {
@@ -938,9 +950,12 @@ async function loadNews(more) {
       const m = new Map(); lists.flat().forEach((it) => m.set(it.no, it));
       state.newsItems = [...m.values()].sort((a, b) => newsTime(b) - newsTime(a)); state.newsCursor = null;
     } else {
-      const p = { channel: state.newsCh, limit: 30 }; if (more && state.newsCursor) p.before = state.newsCursor;
+      const isMacro = state.newsCh === '__macro';
+      const p = { channel: isMacro ? 'tradfi' : state.newsCh, limit: isMacro ? 50 : 30 }; if (more && state.newsCursor) p.before = state.newsCursor;
       const j = await newsGet(p);
-      state.newsItems = more ? state.newsItems.concat(j.items || []) : (j.items || []); state.newsCursor = j.next_cursor || null;
+      let items = j.items || [];
+      if (isMacro) items = items.filter(macroOf);
+      state.newsItems = more ? state.newsItems.concat(items) : items; state.newsCursor = j.next_cursor || null;
     }
     state.newsErr = null;
   } catch (e) { state.newsErr = String(e.message || e); }
@@ -976,6 +991,8 @@ async function pollNews() {
       fresh.slice().reverse().forEach((it) => {
         const hit = (it.coins || []).map(coinKey).filter((c) => wk.has(c));
         const isMain = (it.channels || []).includes('main');
+        const macro = S.notifyMacro ? macroOf(it) : null;
+        if (macro) { notify('r', `${macro}：${newsParts(it).title.slice(0, 60)}`, newsParts(it).title.slice(0, 160)); return; }
         if ((S.notifyNews && hit.length) || (S.notifyNewsAll && isMain)) {
           const { title } = newsParts(it);
           notify('', `${hit.length ? hit.join('、') + ' 快訊' : '快訊'}`, title.slice(0, 140));
