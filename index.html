@@ -109,6 +109,19 @@ nav.tabs .n.hot{background:var(--strong);color:#fff}
 .toast{pointer-events:auto;width:min(420px,100%);background:#2a1c10;border:1px solid #7a5418;border-radius:12px;padding:9px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:13.5px}
 .toast.r{background:#2c1416;border-color:#7a2a30}.toast.g{background:#0f2a20;border-color:#1f6b4e}
 .toast b{display:block;margin-bottom:2px}
+[data-term]{cursor:pointer}
+.kv span[data-term]::after,.tps span[data-term]::after,.sig[data-term] > span::after,.gl-label[data-term]::after{content:" ⓘ";opacity:.55}
+.tag[data-term]{text-decoration:underline dotted rgba(255,255,255,.35);text-underline-offset:3px}
+.gloss-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:70}
+.gloss-bg.open{display:block}
+.gloss{position:fixed;left:12px;right:12px;bottom:calc(84px + var(--sb));margin:0 auto;max-width:440px;background:#20252f;border:1px solid #3a4150;border-radius:14px;padding:14px 16px;z-index:71;box-shadow:0 10px 30px rgba(0,0,0,.5);display:none}
+.gloss.open{display:block}
+.gloss h4{margin:0 0 6px;font-size:16px}
+.gloss p{margin:0;font-size:14px;line-height:1.65;color:#d5d9e3}
+.gloss .how{margin-top:8px;font-size:13px;color:var(--muted)}
+.glist div{padding:9px 0;border-bottom:1px solid var(--line)}
+.glist b{display:block;margin-bottom:2px}
+.glist span{font-size:13.5px;color:#c9cede;line-height:1.6}
 .log div{padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 @media (min-width:900px){ .wrap{padding-left:16px;padding-right:16px} .strip{margin:0 0 12px;padding:0} }
 </style>
@@ -139,6 +152,8 @@ nav.tabs .n.hot{background:var(--strong);color:#fff}
 <div class="sheet-bg" id="sheetBg"></div>
 <div class="sheet" id="sheet"></div>
 <div class="toasts" id="toasts"></div>
+<div class="gloss-bg" id="glossBg"></div>
+<div class="gloss" id="gloss"></div>
 
 <script>
 'use strict';
@@ -466,7 +481,7 @@ const IC = {
   watch: '<path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/>'
 };
 const TABS = {
-  warn: ['轉弱', '轉弱／下跌警示', '分數越高，短線轉弱的訊號越多，5 分以上算強警示。可以用來判斷手上的多單要不要減碼，或找做空機會。不保證一定會跌。'],
+  warn: ['轉弱', '轉弱／下跌警示', '分數越高，短線轉弱的訊號越多，5 分以上算強警示。可以用來判斷手上的多單要不要減碼，或找做空機會。不保證一定會跌。點虛線標籤或 ⓘ 可以看術語說明。'],
   bull: ['多頭', '多頭續強', '24h／12h／4h／1h 全部上漲，而且 1H 均線多頭排列（EMA9＞21＞55）。分數已扣掉費率過熱和離均線太遠的情況。TP 用 ATR 和 24h 高點估算，只是參考位。'],
   brk: ['突破', '早爆發突破', '最近 3 根 1H K 線有收盤站上前 20 根的高點，而且量是平均的 1.8 倍以上。小量幣假突破比較多，要看能不能守住突破位。'],
   bear: ['空頭', '空頭續弱', '24h／12h／4h／1h 全部下跌，而且 1H 均線空頭排列。EMA21 是反彈壓力位。'],
@@ -529,6 +544,7 @@ function render() {
   if (!state.lastScan) { $('list').innerHTML = '<div class="empty">第一次掃描中，大約 10～30 秒…</div>'; return; }
   const rows = sorted(state.tab);
   $('list').innerHTML = rows.length ? rows.map((r) => card(r, state.tab)).join('') : `<div class="empty">${state.tab === 'watch' ? '還沒有自選幣。' : '目前沒有符合條件的幣。'}</div>`;
+  attachTerms($('list'));
 }
 function renderStrip() {
   const R = state.results; if (!R.length) { $('strip').innerHTML = ''; return; }
@@ -544,11 +560,85 @@ function renderStrip() {
     <div class="mini"><div class="k">全市場 24h</div><div class="v"><span class="up">${up}</span> 漲 <span class="down">${uni.length - up}</span> 跌</div><div class="s">${uni.length} 個永續合約</div></div>`;
 }
 
+/* ---------- 名詞解釋：點標籤、數據名稱就跳出說明 ---------- */
+const GLOSS = [
+  ['量價背離', ['量價背離'], '價格在高點附近，成交量卻變小。代表追價的人變少，漲勢沒有新資金撐著，常是上漲動能變弱的前兆。', '雷達條件：價格在 12 小時高點 1% 以內，但最近 4 小時的量不到平常的 7 成。'],
+  ['跌破 EMA55', ['EMA55，短線', '破 EMA55'], '原本站在 EMA55（中期趨勢線）上面，這根 1H K 線收盤明確跌到下面。代表短線的多頭結構被破壞，比跌破 EMA21 更嚴重。', '之後常會反彈回測 EMA55，站不回去就容易續跌。'],
+  ['跌破 EMA21', ['收盤跌破 EMA21', '破 EMA21'], '1H K 線收盤跌到 EMA21（短線趨勢線）下面，代表短線買方守不住，價格常會再往下找支撐。', '如果很快站回 EMA21 就是假跌破；站不回去要小心。'],
+  ['壓在 EMA21 下方', ['EMA21 下方'], '價格在 EMA21 下面，而且 EMA9 已經往下彎。短線偏弱，但還沒到破位的程度。', ''],
+  ['死叉', ['死叉'], '短均線 EMA9 由上往下穿過 EMA21，代表短期動能轉弱。反過來由下往上穿叫「金叉」。', '均線是落後指標，死叉時通常已經跌了一段，最好搭配其他訊號一起看。'],
+  ['高點回落', ['高點回落'], '24 小時內漲了很多，現在已經從最高點回落一段（至少 4%，或 1.5 倍 ATR）。代表有人在高點獲利了結。', ''],
+  ['長上影線', ['長上影'], 'K 線上方留下一根長長的影線：價格曾經衝高，又被賣壓打回來。在高位放量出現時，代表上方賣壓很重。', ''],
+  ['RSI 回落', ['RSI 回落', 'RSI 從超買'], 'RSI 從 75 以上（超買）掉回 65 以下，代表過熱的漲勢開始降溫。', ''],
+  ['放量長黑 K', ['放量長黑'], '收盤比開盤低很多（跌幅超過 1.2 倍 ATR），量又是平常的 2 倍以上的 K 線。代表有大量賣單在砸。', ''],
+  ['假突破', ['假突破'], '先放量站上前高（突破位），之後又跌回突破位下面。追進去的人被套，常引發一波賣壓。', ''],
+  ['價平 OI 增', ['價平 OI 增'], '價格沒什麼動，持倉量（OI）卻增加 3% 以上，代表有人在默默建倉，之後可能有一波行情。', '只知道有人進場，不知道是多是空，要配合突破方向判斷。'],
+  ['持倉量（OI）', ['持倉量', 'OI 增加', 'OI 下降', 'OI'], '市場上還沒平倉的合約總量（Open Interest）。', '價跌 OI 增＝空單在加碼，跌勢可能延續。價漲 OI 降＝多半是空單被迫回補，不是新買盤，續航較弱。價漲 OI 增＝有新資金做多，漲勢比較健康。'],
+  ['資金費率', ['費率擁擠', '費率過熱', '費率偏高', '資金費率', '費率'], '永續合約每 8 小時多空互付的費用。正費率＝多單付錢給空單，數字越高代表做多的人越擠；負費率則相反。', '雷達把 ≥0.05% 算偏高、≥0.1% 算過熱。費率很高又開始跌時，容易發生多單互相踩踏（多殺多）。'],
+  ['負費率', ['負費率'], '資金費率是負的：空單付錢給多單，代表做空的人比較多。', '如果之後往上突破，空單被迫回補會讓漲勢加速（軋空），所以對埋伏是加分。'],
+  ['離均線太遠', ['離均線太遠', '有點延伸'], '價格離 EMA21 超過 4 倍 ATR（有點延伸是 3 倍）。漲得太急，容易回頭修正，不適合追。', ''],
+  ['貼近 24h 高', ['貼近 24h 高'], '現價離 24 小時最高價不到 1%，上方就是壓力。', '突破就是新高；過不去容易回落。'],
+  ['量能放大', ['量能放大'], '最近 4 小時的成交量是平常的 1.5 倍以上，代表有資金進場。', ''],
+  ['RSI 超買', ['RSI 超買'], 'RSI 在 75 以上，漲勢過熱，隨時可能回檔。', ''],
+  ['波動收斂', ['波動極度收斂', '波動收斂', '波動寬度'], '布林通道寬度縮到近 60 根 K 線裡最窄的 20%（極度收斂是 10%）。行情像被壓緊的彈簧，之後常會出現大波動。', '收斂只代表「快要動了」，不代表一定往上，所以要等突破確認。'],
+  ['低點墊高', ['低點墊高'], '最近 6 小時的最低點，比之前 6 小時的最低點還高。代表買方一路把價格往上墊。', ''],
+  ['量縮整理', ['量縮整理'], '整理期間成交量變小（不到平常的 8 成），代表賣壓減輕，籌碼比較安定。', ''],
+  ['均線多頭排列', ['均線多頭排列'], 'EMA9 ＞ EMA21 ＞ EMA55，短、中期趨勢都向上。反過來叫空頭排列。', ''],
+  ['守住突破位', ['守住突破位'], '突破之後，現價還在突破位上面，突破目前有效。', ''],
+  ['跌回突破位', ['跌回突破位'], '突破之後又跌回突破位下面，可能是假突破。', ''],
+  ['小量早期', ['小量早期'], '24h 成交額低於主榜門檻（預設 20M）。比較早期，漲起來的空間大，但假突破也比較多。', ''],
+  ['主流', ['主流'], '24h 成交額高於主榜門檻（預設 20M），流動性好，訊號比較可靠。', ''],
+  ['股票／商品合約', ['股票', '商品', '指數', '傳統金融'], '幣安用 USDT 結算的美股、黃金等永續合約，24 小時都能交易。', '美股休市時（台灣時間白天到晚上開盤前、週末）波動和量會變小，訊號比較不準。'],
+  ['突破位', ['突破位'], '前 20 根 1H K 線的最高價。收盤站上去才算突破。', ''],
+  ['TP（停利參考）', ['TP1', 'TP2', 'TP3'], '分批停利的參考價。TP1＝現價＋1 倍 ATR；TP2＝24h 高點或＋2 倍 ATR；TP3＝突破新高後的延伸目標。', '只是用波動估算的參考位，不是預測價格一定會到。'],
+  ['防守位', ['防守'], '停損參考位。收盤跌破代表原本的看法失效。', ''],
+  ['支撐', ['支撐'], '下方可能有買盤的位置，雷達取 EMA21、EMA55、近 6 小時低點、24h 低點中，在現價下面最近的兩個。', ''],
+  ['距離', ['距離'], '現價離突破位還差多少百分比，越小代表越接近突破。', ''],
+  ['EMA21', ['EMA21'], '指數移動平均線：最近 21 根 K 線的平均價，越新的價格權重越高。可以看成短線趨勢線，價格在上面偏多、在下面偏空。', '雷達用的是 1H 線，在幣安比對時要切到 1H。'],
+  ['EMA55', ['EMA55'], '最近 55 根 K 線的指數平均價，看中期趨勢。1H 的 EMA55 大約是兩天多的平均成本。', ''],
+  ['RSI', ['RSI'], '相對強弱指標，0～100。70 以上算超買（漲多），30 以下算超賣（跌多），50 左右是中性。', ''],
+  ['ATR', ['ATR'], '平均真實波幅：平均每根 1H K 線的波動幅度。數字越大代表這個幣越會跳，停損和停利都要放寬。', ''],
+  ['4H 量比', ['量比'], '最近 4 小時的成交量 ÷ 平常的成交量。1 以上代表比平常熱，1.5 以上算放量。', ''],
+  ['成交額', ['量 '], '24 小時成交額（USDT）。越大代表流動性越好，越不容易被少數人操控。', ''],
+  ['24h 高／低', ['24h 高', '24h 低'], '過去 24 小時的最高價和最低價，常被當成壓力和支撐。', ''],
+  ['近 6H 低點', ['近 6H 低點'], '最近 6 根 1H K 線的最低價，短線的支撐。', ''],
+  ['轉弱分', ['轉弱分', '轉弱訊號'], '把各種轉弱訊號的分數加起來：每個訊號 1～3 分。', '3～4 分是注意，5 分以上是強警示。'],
+  ['埋伏分數', ['埋伏分數', '值得埋伏'], '基本條件（波動收斂＋貼近突破位＋趨勢沒壞）4 分，再依波動極度收斂、低點墊高、量縮、負費率、均線多頭排列、價平 OI 增加分。', '6 分以上會通知。'],
+  ['多頭分數', ['多頭分數', '多頭續強'], '依 24h／12h／4h／1h 的漲幅、量能和成交額加總，再扣掉費率過熱、離均線太遠的分數。', '只用來排序，數字本身沒有固定門檻。'],
+  ['空頭分數', ['空頭分數', '空頭續弱'], '依 24h／12h／4h／1h 的跌幅和量能加總，數字越大代表跌勢越明確。', '']
+];
+function termOf(text) {
+  for (const g of GLOSS) for (const m of g[1]) if (text.includes(m)) return g[0];
+  return null;
+}
+function attachTerms(root) {
+  root.querySelectorAll('.tag, .tps > div > span, .kv > div > span, .sig, .r2 > span, h3').forEach((el) => {
+    if (el.dataset.term) return;
+    const t = termOf(el.textContent || ''); if (t) el.dataset.term = t;
+  });
+  root.querySelectorAll('.coin .badge').forEach((el) => {
+    el.dataset.term = { warn: '轉弱分', watch: '轉弱分', setup: '埋伏分數', bull: '多頭分數', bear: '空頭分數', brk: '4H 量比' }[state.tab] || '轉弱分';
+  });
+}
+function showGloss(key) {
+  const g = GLOSS.find((x) => x[0] === key); if (!g) return;
+  $('gloss').innerHTML = `<h4>${esc(g[0])}</h4><p>${esc(g[2])}</p>${g[3] ? `<div class="how">${esc(g[3])}</div>` : ''}`;
+  if (!glossOpen()) { try { history.pushState({ gloss: 1 }, ''); } catch (e) {} }
+  $('gloss').classList.add('open'); $('glossBg').classList.add('open');
+}
+function glossOpen() { return $('gloss').classList.contains('open'); }
+function hideGloss() { $('gloss').classList.remove('open'); $('glossBg').classList.remove('open'); }
+function closeGloss() { if (!glossOpen()) return; if (history.state && history.state.gloss) history.back(); else hideGloss(); }
+function openGlossary() {
+  openSheet(`<button class="x" data-closesheet="1">×</button><h2>名詞解釋</h2><div class="glist">${GLOSS.map((g) => `<div><b>${esc(g[0])}</b><span>${esc(g[2])}${g[3] ? ' ' + esc(g[3]) : ''}</span></div>`).join('')}</div>`, 'glossary');
+}
+
 /* ---------- 底部面板 ---------- */
 /* 手機返回鍵：先關面板、再回到第一個分頁，最後要連按兩次才離開 */
 let backArmed = false;
 function pushGuard() { try { history.pushState({ g: 1 }, ''); } catch (e) {} }
 window.addEventListener('popstate', () => {
+  if (glossOpen()) { hideGloss(); return; }
   if (state.sheet) { hideSheet(); return; }
   if (state.tab !== 'warn') { setTab('warn'); pushGuard(); return; }
   if (!backArmed) {
@@ -562,6 +652,7 @@ function openSheet(html, name) {
   $('sheet').innerHTML = '<div class="grab"></div>' + html;
   $('sheet').classList.add('open'); $('sheetBg').classList.add('open'); state.sheet = name;
   $('sheet').scrollTop = 0;
+  attachTerms($('sheet'));
 }
 function hideSheet() { $('sheet').classList.remove('open'); $('sheetBg').classList.remove('open'); state.sheet = null; }
 function closeSheet() { if (!state.sheet) return; if (history.state && history.state.sheet) history.back(); else hideSheet(); }
@@ -606,6 +697,7 @@ function openSettings() {
     <div class="row"><label>Telegram Chat ID</label><input type="text" id="s_tgChat" value="${esc(S.tgChat)}" placeholder="123456789" inputmode="numeric"></div>
     <div class="row" style="border:0"><label><small>Token 向 @BotFather 申請；先傳一則訊息給你的 bot，再用 @userinfobot 查 Chat ID。設定只存在這支手機的瀏覽器裡。</small></label><button class="btn" id="tgTest">測試</button></div>
     <button class="btn primary" id="saveBtn" style="width:100%;margin-top:8px">儲存</button>
+    <button class="btn" data-glossary="1" style="width:100%;margin-top:8px">名詞解釋（所有術語）</button>
     <div class="help"><b>加到主畫面</b><br>iPhone：用 Safari 打開 → 下方「分享」→「加入主畫面」。<br>Android：用 Chrome 打開 → 右上「⋮」→「加到主畫面」或「安裝應用程式」。<br>從主畫面打開就像 App 一樣全螢幕，iPhone 也要這樣才能收系統通知。</div>`;
   openSheet(h, 'settings');
 }
@@ -642,8 +734,11 @@ function isStandalone() { return window.matchMedia('(display-mode: standalone)')
 
 /* ---------- 事件 ---------- */
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-tab],[data-star],[data-closesheet],.coin,#saveBtn,#notifBtn,#tgTest');
+  if (glossOpen()) { closeGloss(); return; } // 說明卡開著時，點哪裡都是關掉它
+  const t = e.target.closest('[data-term],[data-tab],[data-star],[data-closesheet],[data-glossary],.coin,#saveBtn,#notifBtn,#tgTest');
   if (!t) return;
+  if (t.dataset.term) return showGloss(t.dataset.term);
+  if (t.dataset.glossary) return openGlossary();
   if (t.dataset.tab) return setTab(t.dataset.tab);
   if (t.dataset.star) { toggleWatch(t.dataset.star); if (t.dataset.reopen) openDetail(t.dataset.reopen); return; }
   if (t.dataset.closesheet) return closeSheet();
