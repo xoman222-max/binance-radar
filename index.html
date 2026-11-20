@@ -12,6 +12,7 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
 <title>幣安合約雷達</title>
+<script src="https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/cn2t.js" defer></script>
 <style>
 :root{
   --bg:#0f1115; --panel:#171a21; --panel2:#1f232c; --line:#2a2f3a; --text:#e8eaf0; --muted:#8b93a7;
@@ -124,6 +125,25 @@ nav.tabs .n.hot{background:var(--strong);color:#fff}
 .glist div{padding:9px 0;border-bottom:1px solid var(--line)}
 .glist b{display:block;margin-bottom:2px}
 .glist span{font-size:13.5px;color:#c9cede;line-height:1.6}
+.tag.b{background:#16294a;color:#a9c8ff}
+.chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin:0 -10px 10px;padding:0 10px}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;background:transparent;border:1px solid var(--line);border-radius:16px;padding:4px 11px;font-size:13px;color:var(--muted)}
+.chip.on{background:var(--panel2);color:var(--text);border-color:#4a5262}
+.news{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 12px;cursor:pointer}
+.news + .news{margin-top:8px}
+.nh{display:flex;gap:8px;font-size:12px;color:var(--muted)}
+.nh .ns{margin-left:auto;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ntl{font-size:14.5px;line-height:1.55;margin-top:3px;word-break:break-word}
+.news.fresh{border-color:#2b4370}
+.nbody{display:none;margin-top:8px;font-size:13.5px;line-height:1.65;color:#d5d9e3;white-space:pre-wrap;word-break:break-word}
+.news.open .nbody{display:block}
+.ai{background:var(--panel2);border-radius:9px;padding:8px 10px;margin-top:8px;white-space:normal}
+.ai b{display:block;font-size:12.5px;color:#a9c8ff;margin-bottom:3px}
+.ai ul{margin:0;padding-left:18px}.ai p{margin:4px 0}
+.ai-note{font-size:11.5px;color:var(--muted);margin-top:4px}
+.nlink{display:inline-block;margin-top:8px;color:#8fb4ff}
+.dn .news{background:var(--panel2);border-color:transparent}
 .log div{padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 @media (min-width:900px){ .wrap{padding-left:16px;padding-right:16px} .strip{margin:0 0 12px;padding:0} }
 </style>
@@ -146,6 +166,7 @@ nav.tabs .n.hot{background:var(--strong);color:#fff}
   <div class="note" id="note"></div>
   <div class="addw" id="addWatch"><input id="addSym" placeholder="輸入幣種，例如 SOL" autocapitalize="characters"><button class="btn" id="addBtn">加入自選</button></div>
   <div class="wbar" id="wbar"><button class="btn primary" id="wscanBtn">只掃自選</button><span class="mut" id="wInfo"></span></div>
+  <div class="chips" id="nchips" style="display:none"></div>
   <div class="list" id="list"></div>
   <footer>資料來自幣安 USDT 永續合約公開行情，不用 API key，也不會下單。訊號都是用過去的價格和量能算出來的，不保證會漲或跌，也不是投資建議。App 開在前景時才會掃描；切到背景或鎖屏會暫停，回來時自動補掃。</footer>
 </div>
@@ -161,13 +182,14 @@ nav.tabs .n.hot{background:var(--strong);color:#fff}
 <script>
 'use strict';
 const API = 'https://fapi.binance.com';
-const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: true, notifySetup: true, setupMin: 6, notifyDump: true, dumpPct: 5, ver: 4,  redUp: false, wake: false, tradfi: true, tgToken: '', tgChat: '', watchlist: [] };
+const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: true, notifySetup: true, setupMin: 6, notifyDump: true, dumpPct: 5, notifyNews: true, notifyNewsAll: false, ver: 5,  redUp: false, wake: false, tradfi: true, tgToken: '', tgChat: '', watchlist: [] };
 function loadSettings() { try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('bnRadarSettings') || '{}')); } catch (e) { return Object.assign({}, DEFAULTS); } }
 function saveSettings() { try { localStorage.setItem('bnRadarSettings', JSON.stringify(S)); } catch (e) {} }
 let S = loadSettings();
 if ((S.ver || 1) < 2) { S.notifyBreakout = true; S.notifySetup = true; } // 舊版設定：突破和埋伏通知預設改成開啟
 if ((S.ver || 1) < 3) { delete S.sound; delete S.vibrate; } // 已移除提示音和震動
-if ((S.ver || 1) < 4) { S.notifyDump = true; S.dumpPct = 5; S.ver = 4; saveSettings(); } // 新增急跌通知
+if ((S.ver || 1) < 4) { S.notifyDump = true; S.dumpPct = 5; } // 新增急跌通知
+if ((S.ver || 1) < 5) { S.notifyNews = true; S.notifyNewsAll = false; S.ver = 5; saveSettings(); } // 新增快訊
 
 const state = { info: new Map(), infoAt: 0, results: [], universe: [], byTab: {}, lastScan: 0, nextScan: 0, scanning: false,
   firstDone: false, alerted: new Map(), log: [], tab: 'warn', sort: 'score', timer: null, sheet: null, swReg: null, wakeLock: null };
@@ -499,12 +521,14 @@ const IC = {
   setup: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/>',
   watch: '<path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/>'
 };
+IC.news = '<path d="M4 4h13a2 2 0 0 1 2 2v13a1 1 0 0 0 2 0V8"/><path d="M4 4v14a2 2 0 0 0 2 2h14"/><path d="M8 8h7M8 12h7M8 16h4"/>';
 const TABS = {
   warn: ['轉弱', '轉弱／下跌警示', '分數越高，短線轉弱的訊號越多，5 分以上算強警示。可以用來判斷手上的多單要不要減碼，或找做空機會。不保證一定會跌。點虛線標籤或 ⓘ 可以看術語說明。'],
   bull: ['多頭', '多頭續強', '24h／12h／4h／1h 全部上漲，而且 1H 均線多頭排列（EMA9＞21＞55）。分數已扣掉費率過熱和離均線太遠的情況。TP 用 ATR 和 24h 高點估算，只是參考位。'],
   brk: ['突破', '早爆發突破', '最近 3 根 1H K 線有收盤站上前 20 根的高點，而且量是平均的 1.8 倍以上。小量幣假突破比較多，要看能不能守住突破位。'],
   bear: ['空頭', '空頭續弱', '24h／12h／4h／1h 全部下跌，而且 1H 均線空頭排列。EMA21 是反彈壓力位。'],
   setup: ['埋伏', '值得埋伏', '還沒噴、正在蓄力的幣：1H 波動收斂到近 60 根最窄的 20%，價格貼近 20H 高點（突破位），站在 EMA55 上方，而且沒有轉弱訊號、費率不擁擠。分數越高條件越漂亮，6 分以上會通知。等放量站上突破位才算確認，跌破防守位就是埋伏失敗。'],
+  news: ['快訊', '加密快訊', '資料來源：方程式新聞 EquationNews。點一則展開全文和 AI 摘要（AI 生成，僅供參考）；點幣種標籤可以看雷達分析。'],
   watch: ['自選', '自選', '點卡片上的 ☆ 就能加入自選。自選幣的轉弱分數到 3 分就會通知。']
 };
 const SORTS = { score: '依分數', c24: '依 24h 漲幅', c1: '依 1h 漲幅', qv: '依成交額' };
@@ -522,7 +546,8 @@ function sorted(tab) {
 }
 function setTab(t) {
   state.tab = t; window.scrollTo(0, 0); render();
-  if (t === 'watch' && S.watchlist.length && Date.now() - (state.watchAt || 0) > 60e3) scanWatch(); // 切到自選就順便更新（1 分鐘內不重複）
+  if (t === 'watch' && S.watchlist.length && Date.now() - (state.watchAt || 0) > 60e3) scanWatch();
+  if (t === 'news') { state.newsUnread = 0; if (!state.newsItems.length || Date.now() - (state.newsAt || 0) > 60e3) { state.newsAt = Date.now(); loadNews(); } } // 切到自選就順便更新（1 分鐘內不重複）
 }
 /* ---------- 只掃自選：幾個幣幾秒就好，不影響全市場掃描的時間表 ---------- */
 async function scanWatch() {
@@ -571,7 +596,7 @@ function card(r, tab) {
     <div class="r1"><button class="star ${w ? 'on' : ''}" data-star="${esc(r.sym)}" aria-label="自選">${w ? '★' : '☆'}</button><span class="sym">${esc(r.base)}</span>${r.kind ? `<span class="tag">${r.kind}</span>` : ''}${badge}
       <div class="px"><div class="p">${fp(r.p, r)}</div><div class="c">${pct(r.c24)}</div></div></div>
     <div class="r2"><span>12h ${pct(r.c12)}</span><span>4h ${pct(r.c4)}</span><span>1h ${pct(r.c1)}</span><span>量 <b>${vol(r.qv)}</b></span><span>費率 ${fr(r.fund)}</span></div>
-    <div class="r3">${r3}</div></div>`;
+    <div class="r3">${r3}${newsTag(r)}</div></div>`;
 }
 function shortSig(k) {
   return { dump: '急跌', e55: '破 EMA55', e21: '破 EMA21', e21b: 'EMA21 下方', cross: '死叉', top: '高點回落', wick: '長上影', rsi: 'RSI 回落', div: '量價背離', fund: '費率擁擠', red: '放量長黑', fake: '假突破', oi: '持倉量' }[k] || k;
@@ -581,8 +606,8 @@ function render() {
   document.body.classList.toggle('redup', !!S.redUp);
   const bt = state.byTab;
   const strongN = (bt.warn || []).filter((r) => r.warnScore >= 5).length;
-  $('tabs').innerHTML = ['warn', 'setup', 'brk', 'bull', 'bear', 'watch'].map((k) => {
-    const c = bt[k] ? bt[k].length : 0;
+  $('tabs').innerHTML = ['warn', 'setup', 'brk', 'bull', 'bear', 'news', 'watch'].map((k) => {
+    const c = k === 'news' ? state.newsUnread || 0 : bt[k] ? bt[k].length : 0;
     return `<button class="${state.tab === k ? 'on' : ''}" data-tab="${k}"><svg viewBox="0 0 24 24">${IC[k]}</svg>${TABS[k][0]}${c ? `<span class="n ${k === 'warn' && strongN ? 'hot' : ''}">${c > 99 ? '99+' : c}</span>` : ''}</button>`;
   }).join('');
   $('tabTitle').textContent = TABS[state.tab][1];
@@ -590,7 +615,10 @@ function render() {
   $('sortSel').innerHTML = Object.entries(SORTS).map(([k, v]) => `<option value="${k}" ${state.sort === k ? 'selected' : ''}>${v}</option>`).join('');
   $('addWatch').style.display = state.tab === 'watch' ? 'flex' : 'none';
   $('wbar').style.display = state.tab === 'watch' && S.watchlist.length ? 'flex' : 'none'; renderWInfo();
+  $('sortSel').style.display = state.tab === 'news' ? 'none' : '';
+  $('nchips').style.display = state.tab === 'news' ? 'flex' : 'none';
   renderStrip();
+  if (state.tab === 'news') { renderNews(); return; }
   if (!state.lastScan) { $('list').innerHTML = '<div class="empty">第一次掃描中，大約 10～30 秒…</div>'; return; }
   const rows = sorted(state.tab);
   $('list').innerHTML = rows.length ? rows.map((r) => card(r, state.tab)).join('') : `<div class="empty">${state.tab === 'watch' ? '還沒有自選幣。' : '目前沒有符合條件的幣。'}</div>`;
@@ -663,7 +691,7 @@ function termOf(text) {
   return null;
 }
 function attachTerms(root) {
-  root.querySelectorAll('.tag, .tps > div > span, .kv > div > span, .sig, .r2 > span, h3').forEach((el) => {
+  root.querySelectorAll('.tag:not(.b), .tps > div > span, .kv > div > span, .sig, .r2 > span, h3').forEach((el) => {
     if (el.dataset.term) return;
     const t = termOf(el.textContent || ''); if (t) el.dataset.term = t;
   });
@@ -721,10 +749,12 @@ function openDetail(sym) {
   if (r.isBear) h += `<h3>空頭續弱（分數 ${r.bearScore.toFixed(1)}）</h3><div>反彈壓力 1H EMA21 在 ${fp(r.E21L, r)}。</div>`;
   if (r.setup) h += `<h3>值得埋伏（${r.setup.score} 分）</h3><div class="kv"><div><span>突破位（20H 高）</span>${fp(r.setup.res, r)}</div><div><span>距離</span>${r.setup.gap.toFixed(1)}%</div><div><span>防守參考</span>${fp(r.setup.defense, r)}</div><div><span>波動寬度排名</span>最窄 ${Math.round(r.setup.rank * 100)}%</div></div><div style="margin-top:6px">${r.setup.tags.map(([c, t]) => `<span class="tag ${c}">${t}</span>`).join('')}</div><div class="mut" style="margin-top:6px">放量站上突破位才算確認；收盤跌破防守位就是埋伏失敗，要停損。</div>`;
   if (r.brk) h += `<h3>放量突破</h3><div>${r.brk.barsAgo === 0 ? '剛收的' : r.brk.barsAgo + ' 根前的'} 1H K 線站上 ${fp(r.brk.level, r)}，量是平均的 ${r.brk.volX.toFixed(1)} 倍。目前${r.brk.holding ? '<span class="up">守住</span>' : '<span class="down">跌回</span>'}突破位。</div>`;
+  h += `<h3>相關快訊</h3><div id="dnews" class="dn"><div class="mut">載入中…</div></div>`;
   h += `<h3>關鍵數據</h3><div class="kv">${lv.map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('')}</div>
     <div style="display:flex;gap:8px;margin-top:16px"><button class="btn" style="flex:1" data-star="${esc(r.sym)}" data-reopen="${esc(r.sym)}">${S.watchlist.includes(r.sym) ? '移出自選' : '加入自選'}</button>
     <a class="btn primary" style="flex:1;text-align:center;text-decoration:none" href="https://www.binance.com/zh-TC/futures/${esc(r.sym)}" target="_blank" rel="noopener">在幣安開啟</a></div>`;
   openSheet(h, 'detail');
+  loadCoinNews(r);
 }
 
 function sw(id, on) { return `<input type="checkbox" class="sw" id="${id}" ${on ? 'checked' : ''}>`; }
@@ -740,6 +770,8 @@ function openSettings() {
     <div class="row"><label>急跌通知<small>不用等 K 線收盤，從近 1～2 小時高點跌超過門檻就通知</small></label>${sw('s_notifyDump', S.notifyDump)}</div>
     <div class="row"><label>急跌門檻</label><select id="s_dumpPct">${[3, 5, 8, 12].map((v) => `<option value="${v}" ${S.dumpPct === v ? 'selected' : ''}>${v}%</option>`).join('')}</select></div>
     <div class="row"><label>放量突破通知<small>剛收的 1H K 線放量站上 20H 高點</small></label>${sw('s_notifyBreakout', S.notifyBreakout)}</div>
+    <div class="row"><label>自選幣快訊通知<small>有新聞提到你的自選幣就通知</small></label>${sw('s_notifyNews', S.notifyNews)}</div>
+    <div class="row"><label>主頻道所有快訊通知<small>方程式新聞主頻道每則都通知，量很多</small></label>${sw('s_notifyNewsAll', S.notifyNewsAll)}</div>
     <div class="row"><label>值得埋伏通知</label>${sw('s_notifySetup', S.notifySetup)}</div>
     <div class="row"><label>埋伏通知門檻</label><select id="s_setupMin">${[[5, '5 分（較多）'], [6, '6 分（建議）'], [7, '7 分（只看最漂亮的）']].map(([v, t]) => `<option value="${v}" ${S.setupMin === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     <div class="row"><label>保持螢幕常亮<small>App 開著時螢幕不會自動關，就能一直掃描</small></label>${sw('s_wake', S.wake)}</div>
@@ -759,7 +791,7 @@ function readSettings() {
   S.watchVol = Math.max(0.5, +$('s_watchVol').value || DEFAULTS.watchVol);
   S.interval = +$('s_interval').value; S.alertMin = +$('s_alertMin').value;
   S.setupMin = +$('s_setupMin').value; S.dumpPct = +$('s_dumpPct').value;
-  for (const k of ['notifyDrop', 'notifyDump', 'notifyBreakout', 'notifySetup', 'wake', 'redUp', 'tradfi']) S[k] = $('s_' + k).checked;
+  for (const k of ['notifyDrop', 'notifyDump', 'notifyBreakout', 'notifySetup', 'notifyNews', 'notifyNewsAll', 'wake', 'redUp', 'tradfi']) S[k] = $('s_' + k).checked;
   S.tgToken = $('s_tgToken').value.trim(); S.tgChat = $('s_tgChat').value.trim();
 }
 function openLog() {
@@ -789,9 +821,16 @@ function isStandalone() { return window.matchMedia('(display-mode: standalone)')
 /* ---------- 事件 ---------- */
 document.addEventListener('click', (e) => {
   if (glossOpen()) { closeGloss(); return; } // 說明卡開著時，點哪裡都是關掉它
-  const t = e.target.closest('[data-term],[data-tab],[data-star],[data-closesheet],[data-glossary],.coin,#saveBtn,#notifBtn,#tgTest');
-  if (!t) return;
+  const t = e.target.closest('[data-term],[data-nch],[data-nmore],[data-coin],a.nlink,.news,[data-tab],[data-star],[data-closesheet],[data-glossary],.coin,#saveBtn,#notifBtn,#tgTest');
+  if (!t || t.classList.contains('nlink')) return;
   if (t.dataset.term) return showGloss(t.dataset.term);
+  if (t.dataset.nch) { if (t.dataset.nch === '__watch') state.newsOnlyWatch = !state.newsOnlyWatch; else { state.newsOnlyWatch = false; state.newsCh = t.dataset.nch; } return loadNews(); }
+  if (t.dataset.nmore) return loadNews(true);
+  if (t.dataset.coin) {
+    const r = state.results.find((x) => coinKey(x.base) === t.dataset.coin);
+    return r ? openDetail(r.sym) : toast('', t.dataset.coin, '這次掃描沒有這個幣（可能不是幣安合約或量太小），可以在自選輸入加入。', 4000);
+  }
+  if (t.classList.contains('news')) { if (t.closest('#dnews')) return; const no = t.dataset.no; state.newsOpen.has(no) ? state.newsOpen.delete(no) : state.newsOpen.add(no); t.classList.toggle('open'); return; }
   if (t.dataset.glossary) return openGlossary();
   if (t.dataset.tab) return setTab(t.dataset.tab);
   if (t.dataset.star) { toggleWatch(t.dataset.star); if (t.dataset.reopen) openDetail(t.dataset.reopen); return; }
@@ -825,6 +864,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
   applyWake();
   if (!state.scanning && Date.now() >= state.nextScan - 5000) scan(); // 從背景回來就補掃
+  pollNews();
 });
 
 if (isIOS() && !isStandalone()) {
@@ -833,6 +873,142 @@ if (isIOS() && !isStandalone()) {
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').then((reg) => { state.swReg = reg; }).catch(() => {});
 }
+/* ---------- 加密快訊：方程式新聞 EquationNews 公開 API（免 key，支援跨網域） ---------- */
+const NEWS_API = 'https://api.eqn.news/public/v1';
+const NEWS_CH = [['all', '全部'], ['main', '主頻道'], ['binance', '幣安公告'], ['pricechange', '價格異動'], ['oi', 'OI 異動'], ['major', '大幅波動'], ['tier2', '二線上新'], ['alpha', '幣安 Alpha'], ['korea', '韓所'], ['hl', 'Hyperliquid'], ['tradfi', '財經'], ['tfmoves', '美股']];
+Object.assign(state, { newsCh: 'all', newsOnlyWatch: false, newsItems: [], newsCursor: null, newsLoading: false, newsOpen: new Set(),
+  feed: [], feedEtag: null, newsUnread: 0, coinNews: new Map() });
+try { state.newsLastNo = +localStorage.getItem('bnRadarNewsNo') || 0; } catch (e) { state.newsLastNo = 0; }
+let tcConv = null;
+function tc(x) { // 簡轉繁（台灣用字）；轉換庫沒載到就維持原文
+  if (!x) return '';
+  try { if (!tcConv && window.OpenCC) tcConv = OpenCC.Converter({ from: 'cn', to: 'tw' }); return tcConv ? tcConv(x) : x; } catch (e) { return x; }
+}
+function txt(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'object') { for (const k of ['text', 'content', 'body', 'title']) if (typeof v[k] === 'string') return v[k]; return Object.values(v).find((x) => typeof x === 'string') || ''; }
+  return String(v);
+}
+function newsParts(it) {
+  const v = it.zh || it.en;
+  let title, body;
+  if (v && typeof v === 'object' && typeof v.title === 'string') { title = v.title; body = txt(v.text ?? v.content ?? v.body ?? ''); }
+  else { const all = txt(v).trim(); const i = all.indexOf('\n'); title = i > 0 ? all.slice(0, i) : all; body = i > 0 ? all.slice(i + 1).trim() : ''; }
+  return { title: tc(title), body: tc(body) };
+}
+const coinKey = (c) => String(c || '').toUpperCase().replace(/USDT$/, '').replace(/^(1000000|1000|1M)(?=[A-Z])/, '');
+function newsTime(it) { const t = Date.parse(it.time); return isFinite(t) ? t : Date.now(); }
+function agoStr(t) { const m = Math.max(0, Math.round((Date.now() - t) / 60e3)); return m < 1 ? '剛剛' : m < 60 ? `${m} 分前` : m < 1440 ? `${Math.floor(m / 60)} 小時前` : `${Math.floor(m / 1440)} 天前`; }
+function aiHtml(ai) {
+  if (!ai) return '';
+  let h = '';
+  const pts = (ai.summary && ai.summary.points) || [];
+  if (pts.length) h += `<div class="ai"><b>AI 摘要</b><ul>${pts.map((p) => `<li>${esc(tc(txt(p.zh) || txt(p.en) || txt(p)))}</li>`).join('')}</ul></div>`;
+  const ov = ai.overview;
+  if (ov && ov.status === 'ready') {
+    const o = ov.zh || ov.en; const ps = (o && o.paragraphs) || [];
+    if (ps.length) h += `<div class="ai"><b>AI 總覽</b>${ps.map((p) => `<p>${esc(tc(txt(p.text) || txt(p)))}</p>`).join('')}</div>`;
+  } else if (ov && ov.status === 'pending') h += '<div class="ai mut">AI 總覽產生中…</div>';
+  return h ? h + '<div class="ai-note">AI 生成，僅供參考</div>' : '';
+}
+function newsHtml(it, compact) {
+  const { title, body } = newsParts(it), t = newsTime(it);
+  const coins = (it.coins || []).slice(0, 6).map((c) => `<span class="tag b" data-coin="${esc(coinKey(c))}">${esc(c)}</span>`).join('');
+  const link = typeof it.url === 'string' && it.url.startsWith('https://') ? `<a class="nlink" href="${esc(it.url)}" target="_blank" rel="noopener">看原文 ›</a>` : '';
+  const open = compact || state.newsOpen.has(String(it.no));
+  return `<div class="news ${open ? 'open' : ''} ${Date.now() - t < 15 * 60e3 ? 'fresh' : ''}" data-no="${esc(it.no)}">
+    <div class="nh"><span>${agoStr(t)}・${new Date(t).toLocaleTimeString('zh-TW', { hour12: false, hour: '2-digit', minute: '2-digit' })}</span><span class="ns">${esc(it.source || '')}</span></div>
+    <div class="ntl">${esc(title)}</div>${coins ? `<div style="margin-top:4px">${coins}</div>` : ''}
+    <div class="nbody">${body ? esc(body) : ''}${aiHtml(it.ai)}${link}</div></div>`;
+}
+async function newsGet(params) {
+  const q = new URLSearchParams(params).toString();
+  const r = await fetch(`${NEWS_API}/news?${q}`, { cache: 'no-store' });
+  if (!r.ok) throw new Error('快訊 HTTP ' + r.status);
+  return r.json();
+}
+function watchKeys() { return S.watchlist.map((x) => coinKey((state.info.get(x) || {}).base || x)); }
+
+async function loadNews(more) {
+  if (state.newsLoading) return;
+  state.newsLoading = true; if (!more) { state.newsItems = []; state.newsCursor = null; } renderNews();
+  try {
+    if (state.newsOnlyWatch) {
+      const keys = watchKeys().slice(0, 8);
+      const lists = await Promise.all(keys.map((c) => newsGet({ coin: c, limit: 10 }).then((j) => j.items || []).catch(() => [])));
+      const m = new Map(); lists.flat().forEach((it) => m.set(it.no, it));
+      state.newsItems = [...m.values()].sort((a, b) => newsTime(b) - newsTime(a)); state.newsCursor = null;
+    } else {
+      const p = { channel: state.newsCh, limit: 30 }; if (more && state.newsCursor) p.before = state.newsCursor;
+      const j = await newsGet(p);
+      state.newsItems = more ? state.newsItems.concat(j.items || []) : (j.items || []); state.newsCursor = j.next_cursor || null;
+    }
+    state.newsErr = null;
+  } catch (e) { state.newsErr = String(e.message || e); }
+  state.newsLoading = false; state.newsUnread = 0; if (state.tab === 'news') render();
+}
+function renderNews() {
+  $('nchips').innerHTML = NEWS_CH.map(([k, n]) => `<button class="chip ${!state.newsOnlyWatch && state.newsCh === k ? 'on' : ''}" data-nch="${k}">${n}</button>`).join('')
+    + `<button class="chip ${state.newsOnlyWatch ? 'on' : ''}" data-nch="__watch">★ 只看自選</button>`;
+  let h = state.newsItems.map((it) => newsHtml(it)).join('');
+  if (!state.newsItems.length) h = `<div class="empty">${state.newsLoading ? '載入中…' : state.newsErr ? '讀不到快訊：' + esc(state.newsErr) : state.newsOnlyWatch && !S.watchlist.length ? '還沒有自選幣。' : '沒有快訊。'}</div>`;
+  else if (state.newsCursor) h += `<button class="btn" data-nmore="1" style="width:100%;margin-top:10px">${state.newsLoading ? '載入中…' : '載入更多'}</button>`;
+  $('list').innerHTML = `<div>${h}</div>`;
+}
+/* 背景輪詢（App 開著時每 30 秒）：更新卡片上的「快訊」標籤，並通知自選幣新聞 */
+async function pollNews() {
+  if (document.visibilityState !== 'visible') return;
+  try {
+    const r = await fetch(`${NEWS_API}/news?channel=all&limit=50`, { cache: 'no-store', headers: state.feedEtag ? { 'If-None-Match': state.feedEtag } : {} });
+    if (r.status === 304) return;
+    if (!r.ok) return;
+    state.feedEtag = r.headers.get('ETag');
+    const items = (await r.json()).items || [];
+    state.feed = items;
+    const cm = new Map();
+    for (const it of items) for (const c of it.coins || []) { const k = coinKey(c); if (!cm.has(k)) cm.set(k, it); }
+    state.coinNews = cm;
+    const fresh = items.filter((it) => +it.no > state.newsLastNo && Date.now() - newsTime(it) < 20 * 60e3);
+    const first = !state.newsLastNo;
+    const maxNo = Math.max(state.newsLastNo, ...items.map((it) => +it.no || 0));
+    if (maxNo > state.newsLastNo) { state.newsLastNo = maxNo; try { localStorage.setItem('bnRadarNewsNo', String(maxNo)); } catch (e) {} }
+    if (!first && fresh.length) {
+      const wk = new Set(watchKeys());
+      fresh.slice().reverse().forEach((it) => {
+        const hit = (it.coins || []).map(coinKey).filter((c) => wk.has(c));
+        const isMain = (it.channels || []).includes('main');
+        if ((S.notifyNews && hit.length) || (S.notifyNewsAll && isMain)) {
+          const { title } = newsParts(it);
+          notify('', `${hit.length ? hit.join('、') + ' 快訊' : '快訊'}`, title.slice(0, 140));
+        }
+      });
+      if (state.tab !== 'news') state.newsUnread = (state.newsUnread || 0) + fresh.length;
+      if (state.tab === 'news' && state.newsCh === 'all' && !state.newsOnlyWatch) {
+        const have = new Set(state.newsItems.map((x) => x.no));
+        state.newsItems = fresh.filter((x) => !have.has(x.no)).concat(state.newsItems);
+      }
+    }
+    render();
+  } catch (e) {}
+}
+function newsTag(r) {
+  const it = state.coinNews.get(coinKey(r.base));
+  if (!it || Date.now() - newsTime(it) > 6 * 3600e3) return '';
+  return `<div style="margin-top:4px"><span class="tag b">快訊 ${agoStr(newsTime(it))}：${esc(newsParts(it).title.slice(0, 22))}…</span></div>`;
+}
+async function loadCoinNews(r) {
+  const key = coinKey(r.base);
+  try {
+    const j = await newsGet({ coin: key, limit: 5 });
+    const el = $('dnews'); if (!el || state.sheet !== 'detail') return;
+    const items = j.items || [];
+    el.innerHTML = items.length ? items.map((it) => newsHtml(it, true)).join('') : '<div class="mut">最近沒有這個幣的快訊。</div>';
+  } catch (e) { const el = $('dnews'); if (el) el.innerHTML = '<div class="mut">讀不到快訊。</div>'; }
+}
+setInterval(pollNews, 30e3);
+setTimeout(pollNews, 1500);
+
 /* ---------- 上次結果快取：打開 App 先顯示上次掃描，不用等 ---------- */
 function saveCache() {
   try {
