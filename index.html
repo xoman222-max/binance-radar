@@ -161,12 +161,13 @@ nav.tabs .n.hot{background:var(--strong);color:#fff}
 <script>
 'use strict';
 const API = 'https://fapi.binance.com';
-const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: true, notifySetup: true, setupMin: 6, ver: 3,  redUp: false, wake: false, tradfi: true, tgToken: '', tgChat: '', watchlist: [] };
+const DEFAULTS = { mainVol: 20, watchVol: 5, interval: 5, alertMin: 5, notifyDrop: true, notifyBreakout: true, notifySetup: true, setupMin: 6, notifyDump: true, dumpPct: 5, ver: 4,  redUp: false, wake: false, tradfi: true, tgToken: '', tgChat: '', watchlist: [] };
 function loadSettings() { try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('bnRadarSettings') || '{}')); } catch (e) { return Object.assign({}, DEFAULTS); } }
 function saveSettings() { try { localStorage.setItem('bnRadarSettings', JSON.stringify(S)); } catch (e) {} }
 let S = loadSettings();
 if ((S.ver || 1) < 2) { S.notifyBreakout = true; S.notifySetup = true; } // 舊版設定：突破和埋伏通知預設改成開啟
-if ((S.ver || 1) < 3) { delete S.sound; delete S.vibrate; S.ver = 3; saveSettings(); } // 已移除提示音和震動
+if ((S.ver || 1) < 3) { delete S.sound; delete S.vibrate; } // 已移除提示音和震動
+if ((S.ver || 1) < 4) { S.notifyDump = true; S.dumpPct = 5; S.ver = 4; saveSettings(); } // 新增急跌通知
 
 const state = { info: new Map(), infoAt: 0, results: [], universe: [], byTab: {}, lastScan: 0, nextScan: 0, scanning: false,
   firstDone: false, alerted: new Map(), log: [], tab: 'warn', sort: 'score', timer: null, sheet: null, swReg: null, wakeLock: null };
@@ -312,6 +313,10 @@ function analyze(t, k, fund) {
   else if (r.fund >= 0.0005 && r.c1 < 0) W(1, '資金費率偏高且開始回落', 'fund');
   if (last.c < last.o && last.o - last.c >= 1.2 * A && r.lastVolRatio >= 2) W(2, `放量長黑 K（量 ${r.lastVolRatio.toFixed(1)} 倍）`, 'red');
   if (r.brk && !r.brk.holding && p < r.brk.level * 0.995) W(2, '放量突破後又跌回突破位（假突破）', 'fake');
+  // 急跌：不等 K 線收盤，直接看現價離最近 1～2 小時高點跌了多少
+  r.dumpHi = Math.max(cur.h, last.h);
+  r.dump = Math.max(0, (1 - p / r.dumpHi) * 100);
+  if (r.dump >= S.dumpPct) W(3, `近 1～2 小時從 ${fp(r.dumpHi, r)} 急跌 ${r.dump.toFixed(1)}%`, 'dump');
   r.warnScore = sum(r.warns.map((w) => w.pts));
   r.supports = [r.E21L, r.E55L, r.swingLow, r.low24].filter((v) => isFinite(v) && v < p * 0.998).sort((a, b) => b - a).slice(0, 2);
 
@@ -423,12 +428,21 @@ function handleAlerts() {
       const bk = 'b:' + r.sym + ':' + r.brk.level;
       if (!state.alerted.has(bk)) { items.push({ type: 'brk', r }); state.alerted.set(bk, { t: now }); }
     }
+    const dk = 'd:' + r.sym, pd = state.alerted.get(dk);
+    const dthr = S.watchlist.includes(r.sym) ? S.dumpPct * 0.6 : S.dumpPct; // 自選幣門檻比較低
+    if (pd && r.dump < dthr * 0.5) state.alerted.delete(dk);
+    if (S.notifyDump && r.dump >= dthr && (!pd || r.dump >= pd.score + dthr / 2 || now - pd.t > 3600e3)) {
+      items.push({ type: 'dump', r }); state.alerted.set(dk, { score: r.dump, t: now });
+    }
     const sk = 's:' + r.sym, ps = state.alerted.get(sk);
     if (!r.setup && ps) state.alerted.delete(sk);
     if (S.notifySetup && r.setup && r.setup.score >= S.setupMin && (!ps || now - ps.t > 6 * 3600e3)) {
       items.push({ type: 'setup', r }); state.alerted.set(sk, { t: now });
     }
   }
+  const dumps = items.filter((i) => i.type === 'dump').sort((a, b) => b.r.dump - a.r.dump);
+  if (dumps.length > 3) notify('r', `急跌 ${dumps.length} 檔`, dumps.slice(0, 8).map((i) => `${i.r.base} -${i.r.dump.toFixed(1)}%｜${fp(i.r.dumpHi, i.r)} → ${fp(i.r.p, i.r)}`).join('\n'));
+  else dumps.forEach((i) => notify('r', `${i.r.base} 急跌 -${i.r.dump.toFixed(1)}%`, `近 1～2 小時 ${fp(i.r.dumpHi, i.r)} → ${fp(i.r.p, i.r)}\n${fmtShort(i.r)}`));
   const drops = items.filter((i) => i.type === 'drop').sort((a, b) => b.r.warnScore - a.r.warnScore), brks = items.filter((i) => i.type === 'brk');
   if (drops.length) {
     if (!state.firstDone || drops.length > 3) notify('r', `轉弱警示 ${drops.length} 檔`, drops.slice(0, 8).map((i) => `${i.r.base} ${i.r.warnScore}分 ${fmtShort(i.r)}`).join('\n') + (drops.length > 8 ? `\n…等 ${drops.length} 檔` : ''));
@@ -560,7 +574,7 @@ function card(r, tab) {
     <div class="r3">${r3}</div></div>`;
 }
 function shortSig(k) {
-  return { e55: '破 EMA55', e21: '破 EMA21', e21b: 'EMA21 下方', cross: '死叉', top: '高點回落', wick: '長上影', rsi: 'RSI 回落', div: '量價背離', fund: '費率擁擠', red: '放量長黑', fake: '假突破', oi: '持倉量' }[k] || k;
+  return { dump: '急跌', e55: '破 EMA55', e21: '破 EMA21', e21b: 'EMA21 下方', cross: '死叉', top: '高點回落', wick: '長上影', rsi: 'RSI 回落', div: '量價背離', fund: '費率擁擠', red: '放量長黑', fake: '假突破', oi: '持倉量' }[k] || k;
 }
 
 function render() {
@@ -598,6 +612,7 @@ function renderStrip() {
 
 /* ---------- 名詞解釋：點標籤、數據名稱就跳出說明 ---------- */
 const GLOSS = [
+  ['急跌', ['急跌'], '現價比最近 1～2 小時的最高點低了設定的幅度（預設 5%）。不用等 K 線收盤，掃描到就算，所以比其他轉弱訊號快。', '自選幣門檻是設定值的 6 成。急跌後常有反彈，但如果放量又跌破支撐，容易繼續往下。'],
   ['量價背離', ['量價背離'], '價格在高點附近，成交量卻變小。代表追價的人變少，漲勢沒有新資金撐著，常是上漲動能變弱的前兆。', '雷達條件：價格在 12 小時高點 1% 以內，但最近 4 小時的量不到平常的 7 成。'],
   ['跌破 EMA55', ['EMA55，短線', '破 EMA55'], '原本站在 EMA55（中期趨勢線）上面，這根 1H K 線收盤明確跌到下面。代表短線的多頭結構被破壞，比跌破 EMA21 更嚴重。', '之後常會反彈回測 EMA55，站不回去就容易續跌。'],
   ['跌破 EMA21', ['收盤跌破 EMA21', '破 EMA21'], '1H K 線收盤跌到 EMA21（短線趨勢線）下面，代表短線買方守不住，價格常會再往下找支撐。', '如果很快站回 EMA21 就是假跌破；站不回去要小心。'],
@@ -722,6 +737,8 @@ function openSettings() {
     <div class="row"><label>掃描間隔</label><select id="s_interval">${[3, 5, 10, 15].map((v) => `<option value="${v}" ${S.interval === v ? 'selected' : ''}>${v} 分鐘</option>`).join('')}</select></div>
     <div class="row"><label>下跌通知門檻<small>自選幣 3 分就會通知</small></label><select id="s_alertMin">${[[4, '4 分（敏感）'], [5, '5 分（建議）'], [6, '6 分（只看強訊號）']].map(([v, t]) => `<option value="${v}" ${S.alertMin === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     <div class="row"><label>轉弱／下跌警示通知</label>${sw('s_notifyDrop', S.notifyDrop)}</div>
+    <div class="row"><label>急跌通知<small>不用等 K 線收盤，從近 1～2 小時高點跌超過門檻就通知</small></label>${sw('s_notifyDump', S.notifyDump)}</div>
+    <div class="row"><label>急跌門檻</label><select id="s_dumpPct">${[3, 5, 8, 12].map((v) => `<option value="${v}" ${S.dumpPct === v ? 'selected' : ''}>${v}%</option>`).join('')}</select></div>
     <div class="row"><label>放量突破通知<small>剛收的 1H K 線放量站上 20H 高點</small></label>${sw('s_notifyBreakout', S.notifyBreakout)}</div>
     <div class="row"><label>值得埋伏通知</label>${sw('s_notifySetup', S.notifySetup)}</div>
     <div class="row"><label>埋伏通知門檻</label><select id="s_setupMin">${[[5, '5 分（較多）'], [6, '6 分（建議）'], [7, '7 分（只看最漂亮的）']].map(([v, t]) => `<option value="${v}" ${S.setupMin === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
@@ -741,8 +758,8 @@ function readSettings() {
   S.mainVol = Math.max(1, +$('s_mainVol').value || DEFAULTS.mainVol);
   S.watchVol = Math.max(0.5, +$('s_watchVol').value || DEFAULTS.watchVol);
   S.interval = +$('s_interval').value; S.alertMin = +$('s_alertMin').value;
-  S.setupMin = +$('s_setupMin').value;
-  for (const k of ['notifyDrop', 'notifyBreakout', 'notifySetup', 'wake', 'redUp', 'tradfi']) S[k] = $('s_' + k).checked;
+  S.setupMin = +$('s_setupMin').value; S.dumpPct = +$('s_dumpPct').value;
+  for (const k of ['notifyDrop', 'notifyDump', 'notifyBreakout', 'notifySetup', 'wake', 'redUp', 'tradfi']) S[k] = $('s_' + k).checked;
   S.tgToken = $('s_tgToken').value.trim(); S.tgChat = $('s_tgChat').value.trim();
 }
 function openLog() {
