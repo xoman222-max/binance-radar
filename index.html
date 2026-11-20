@@ -749,12 +749,10 @@ function openDetail(sym) {
   if (r.isBear) h += `<h3>空頭續弱（分數 ${r.bearScore.toFixed(1)}）</h3><div>反彈壓力 1H EMA21 在 ${fp(r.E21L, r)}。</div>`;
   if (r.setup) h += `<h3>值得埋伏（${r.setup.score} 分）</h3><div class="kv"><div><span>突破位（20H 高）</span>${fp(r.setup.res, r)}</div><div><span>距離</span>${r.setup.gap.toFixed(1)}%</div><div><span>防守參考</span>${fp(r.setup.defense, r)}</div><div><span>波動寬度排名</span>最窄 ${Math.round(r.setup.rank * 100)}%</div></div><div style="margin-top:6px">${r.setup.tags.map(([c, t]) => `<span class="tag ${c}">${t}</span>`).join('')}</div><div class="mut" style="margin-top:6px">放量站上突破位才算確認；收盤跌破防守位就是埋伏失敗，要停損。</div>`;
   if (r.brk) h += `<h3>放量突破</h3><div>${r.brk.barsAgo === 0 ? '剛收的' : r.brk.barsAgo + ' 根前的'} 1H K 線站上 ${fp(r.brk.level, r)}，量是平均的 ${r.brk.volX.toFixed(1)} 倍。目前${r.brk.holding ? '<span class="up">守住</span>' : '<span class="down">跌回</span>'}突破位。</div>`;
-  h += `<h3>相關快訊</h3><div id="dnews" class="dn"><div class="mut">載入中…</div></div>`;
   h += `<h3>關鍵數據</h3><div class="kv">${lv.map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('')}</div>
     <div style="display:flex;gap:8px;margin-top:16px"><button class="btn" style="flex:1" data-star="${esc(r.sym)}" data-reopen="${esc(r.sym)}">${S.watchlist.includes(r.sym) ? '移出自選' : '加入自選'}</button>
     <a class="btn primary" style="flex:1;text-align:center;text-decoration:none" href="https://www.binance.com/zh-TC/futures/${esc(r.sym)}" target="_blank" rel="noopener">在幣安開啟</a></div>`;
   openSheet(h, 'detail');
-  loadCoinNews(r);
 }
 
 function sw(id, on) { return `<input type="checkbox" class="sw" id="${id}" ${on ? 'checked' : ''}>`; }
