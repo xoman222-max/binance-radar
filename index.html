@@ -46,7 +46,9 @@ button{cursor:pointer}
 .bar h2{font-size:17px;margin:0;flex:1}
 .bar select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:13px}
 .note{color:var(--muted);font-size:12.5px;margin:0 0 10px;line-height:1.5}
-.addw{display:none;gap:6px;margin:0 0 10px}
+.addw{display:none;gap:6px;margin:0 0 6px}
+.wbar{display:none;align-items:center;gap:8px;margin:0 0 10px}
+.wbar .mut{font-size:12.5px;flex:1}
 .addw input{flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;min-width:0}
 .btn{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 14px;white-space:nowrap}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -143,6 +145,7 @@ nav.tabs .n.hot{background:var(--strong);color:#fff}
   <div class="bar"><h2 id="tabTitle"></h2><select id="sortSel" aria-label="排序"></select></div>
   <div class="note" id="note"></div>
   <div class="addw" id="addWatch"><input id="addSym" placeholder="輸入幣種，例如 SOL" autocapitalize="characters"><button class="btn" id="addBtn">加入自選</button></div>
+  <div class="wbar" id="wbar"><button class="btn primary" id="wscanBtn">只掃自選</button><span class="mut" id="wInfo"></span></div>
   <div class="list" id="list"></div>
   <footer>資料來自幣安 USDT 永續合約公開行情，不用 API key，也不會下單。訊號都是用過去的價格和量能算出來的，不保證會漲或跌，也不是投資建議。App 開在前景時才會掃描；切到背景或鎖屏會暫停，回來時自動補掃。</footer>
 </div>
@@ -503,7 +506,37 @@ function sorted(tab) {
   const f = k === 'score' ? (r) => scoreOf(r, tab) : (r) => r[k] ?? -1e18;
   return rows.sort((a, b) => f(b) - f(a));
 }
-function setTab(t) { state.tab = t; window.scrollTo(0, 0); render(); }
+function setTab(t) {
+  state.tab = t; window.scrollTo(0, 0); render();
+  if (t === 'watch' && S.watchlist.length && Date.now() - (state.watchAt || 0) > 60e3) scanWatch(); // 切到自選就順便更新（1 分鐘內不重複）
+}
+/* ---------- 只掃自選：幾個幣幾秒就好，不影響全市場掃描的時間表 ---------- */
+async function scanWatch() {
+  if (state.scanning || state.wscanning || !S.watchlist.length) return;
+  state.wscanning = true; $('wscanBtn').disabled = true; $('wscanBtn').textContent = '掃描中…';
+  try {
+    if (!state.info.size) await loadExchangeInfo();
+    const syms = S.watchlist.filter((x) => state.info.has(x));
+    const rows = await pool(syms, 6, async (sym) => {
+      const [t, pr, k] = await Promise.all([
+        getJSON(`/fapi/v1/ticker/24hr?symbol=${sym}`), getJSON(`/fapi/v1/premiumIndex?symbol=${sym}`),
+        getJSON(`/fapi/v1/klines?symbol=${sym}&interval=1h&limit=300`)]);
+      const r = analyze(t, k, +pr.lastFundingRate);
+      if (r) { try { applyOI(r, await getJSON(`/futures/data/openInterestHist?symbol=${sym}&period=1h&limit=5`)); } catch (e) {} }
+      return r;
+    });
+    const fresh = rows.filter(Boolean), m = new Map(fresh.map((r) => [r.sym, r]));
+    if (!fresh.length) throw new Error('沒有拿到資料');
+    state.results = state.results.filter((r) => !m.has(r.sym)).concat(fresh);
+    state.watchAt = Date.now();
+    classify(); handleAlerts(); render(); saveCache();
+  } catch (e) {
+    toast('r', '自選掃描失敗', String(e.message || e), 5000);
+  } finally {
+    state.wscanning = false; $('wscanBtn').disabled = false; $('wscanBtn').textContent = '只掃自選'; renderWInfo();
+  }
+}
+function renderWInfo() { $('wInfo').textContent = state.watchAt ? `自選更新 ${timeStr(state.watchAt)}` : `${S.watchlist.length} 個自選幣`; }
 
 function card(r, tab) {
   const w = S.watchlist.includes(r.sym);
@@ -542,6 +575,7 @@ function render() {
   $('note').textContent = TABS[state.tab][2];
   $('sortSel').innerHTML = Object.entries(SORTS).map(([k, v]) => `<option value="${k}" ${state.sort === k ? 'selected' : ''}>${v}</option>`).join('');
   $('addWatch').style.display = state.tab === 'watch' ? 'flex' : 'none';
+  $('wbar').style.display = state.tab === 'watch' && S.watchlist.length ? 'flex' : 'none'; renderWInfo();
   renderStrip();
   if (!state.lastScan) { $('list').innerHTML = '<div class="empty">第一次掃描中，大約 10～30 秒…</div>'; return; }
   const rows = sorted(state.tab);
@@ -759,13 +793,14 @@ $('sheetBg').onclick = closeSheet;
 $('scanBtn').onclick = () => scan();
 $('setBtn').onclick = openSettings;
 $('logBtn').onclick = openLog;
+$('wscanBtn').onclick = () => scanWatch();
 $('sortSel').onchange = (e) => { state.sort = e.target.value; render(); };
 $('addBtn').onclick = () => {
   let s = $('addSym').value.trim().toUpperCase(); if (!s) return;
   if (!s.endsWith('USDT')) s += 'USDT';
   if (state.info.size && !state.info.has(s)) return notify('', '找不到幣種', `幣安 USDT 永續合約裡沒有 ${s}`);
   if (!S.watchlist.includes(s)) { S.watchlist.push(s); saveSettings(); }
-  $('addSym').value = ''; scan();
+  $('addSym').value = ''; state.watchAt = 0; render(); scanWatch();
 };
 $('addSym').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('addBtn').click(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
