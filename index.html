@@ -381,8 +381,10 @@ async function scan() {
     ])].slice(0, 50);
     setStatus('讀取持倉量…'); setProgress(0.9);
     await pool(shortlist, 4, async (r) => applyOI(r, await getJSON(`/futures/data/openInterestHist?symbol=${r.sym}&period=1h&limit=5`)));
-    state.results = res; state.lastScan = Date.now(); state.universe = tick.filter((t) => state.info.has(t.symbol));
-    hideBanner(); classify(); handleAlerts(); render();
+    const uni = tick.filter((t) => state.info.has(t.symbol));
+    state.results = res; state.lastScan = Date.now();
+    state.mkt = { up: uni.filter((t) => +t.priceChangePercent > 0).length, total: uni.length };
+    hideBanner(); classify(); handleAlerts(); render(); saveCache();
   } catch (e) {
     showBanner(`連不到幣安合約 API：${esc(e.message || e)}。請確認網路，或你目前的網路/地區是否被幣安限制。會在下次排程自動重試。`);
   } finally {
@@ -548,8 +550,8 @@ function render() {
 }
 function renderStrip() {
   const R = state.results; if (!R.length) { $('strip').innerHTML = ''; return; }
-  const btc = R.find((r) => r.sym === 'BTCUSDT'), uni = state.universe;
-  const up = uni.filter((t) => +t.priceChangePercent > 0).length;
+  const btc = R.find((r) => r.sym === 'BTCUSDT');
+  const up = (state.mkt || {}).up || 0, uni = { length: (state.mkt || {}).total || 0 };
   let st = '盤整';
   if (btc) st = btc.warnScore >= 5 ? '<span class="lvl5">轉弱中</span>' : btc.isBear ? '<span class="down">空頭續弱</span>' : btc.isBull ? '<span class="up">多頭續強</span>' : btc.warnScore >= 3 ? '<span class="lvl3">留意轉弱</span>' : '盤整';
   const warn = state.byTab.warn || [], strong = warn.filter((r) => r.warnScore >= 5).length;
@@ -725,7 +727,8 @@ function tickStatus() {
   if (state.scanning) return;
   const s = Math.max(0, Math.ceil((state.nextScan - Date.now()) / 1000));
   if (!state.lastScan) { setStatus(state.nextScan ? `等待重試 ${s} 秒` : '準備中…'); return; }
-  setStatus(`更新 <b>${timeStr(state.lastScan).slice(0, 5)}</b><br>下次 ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
+  const ago = Math.floor((Date.now() - state.lastScan) / 60e3);
+  setStatus(`更新 <b>${timeStr(state.lastScan).slice(0, 5)}</b>${ago >= 1 ? `（${ago} 分前）` : ''}<br>下次 ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
 }
 function showBanner(h) { $('banner').innerHTML = h; $('banner').style.display = 'block'; }
 function hideBanner() { $('banner').style.display = 'none'; }
@@ -778,11 +781,38 @@ if (isIOS() && !isStandalone()) {
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').then((reg) => { state.swReg = reg; }).catch(() => {});
 }
+/* ---------- 上次結果快取：打開 App 先顯示上次掃描，不用等 ---------- */
+function saveCache() {
+  try {
+    const now = Date.now();
+    localStorage.setItem('bnRadarCache', JSON.stringify({
+      t: state.lastScan, results: state.results, mkt: state.mkt,
+      info: [...state.info], infoAt: state.infoAt,
+      alerted: [...state.alerted].filter(([, v]) => now - v.t < 24 * 3600e3)
+    }));
+  } catch (e) {}
+}
+function loadCache() {
+  try {
+    const c = JSON.parse(localStorage.getItem('bnRadarCache') || 'null');
+    if (!c || !c.results || Date.now() - c.t > 24 * 3600e3) return false;
+    state.info = new Map(c.info); state.infoAt = c.infoAt || 0;
+    state.results = c.results; state.lastScan = c.t; state.mkt = c.mkt;
+    state.alerted = new Map(c.alerted || []); state.firstDone = true; // 已通知過的不會因為重開 App 再通知一次
+    classify();
+    return true;
+  } catch (e) { return false; }
+}
 pushGuard();
 setInterval(tickStatus, 1000);
 applyWake();
+const hadCache = loadCache();
 render();
-scan();
+if (hadCache && Date.now() - state.lastScan < S.interval * 60e3) {
+  state.nextScan = state.lastScan + S.interval * 60e3;               // 上次掃描還新：照原本的時間表
+  state.timer = setTimeout(scan, state.nextScan - Date.now());
+  tickStatus();
+} else scan();                                                        // 太舊才馬上重掃，畫面先顯示上次結果
 </script>
 </body>
 </html>
