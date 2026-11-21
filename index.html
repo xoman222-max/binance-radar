@@ -246,14 +246,26 @@ function fr(v) { if (v == null) return '—'; const s = (v * 100).toFixed(3) + '
 function timeStr(t) { return new Date(t).toLocaleTimeString('zh-TW', { hour12: false }); }
 
 /* ---------- 資料 ---------- */
+/* 判斷是不是股票、商品等傳統金融合約：幣安的欄位寫法不一定，所以多種線索一起看 */
+const TRADFI_STOCK = new Set('TSLA NVDA AAPL MSFT AMZN GOOGL GOOG META NFLX AMD INTC COIN HOOD MSTR PLTR CRCL CIRCL ORCL AVGO TSM BABA SMCI ARM MU UBER SHOP SNOW PYPL DIS JPM BAC GS V MA WMT COST KO PEP NKE XOM CVX SPY QQQ IWM DIA GLD SLV TLT USO UNG ARKK SOXL TQQQ MCD IBM CRM ADBE SBUX BA GME AMC RIVN LCID NIO XPEV LI PDD JD BIDU SQ RBLX ABNB DASH ZM'.split(' '));
+const TRADFI_CMDTY = new Set('XAU XAG XPT XPD XCU COPPER GOLD SILVER WTI BRENT OIL CL NATGAS NG'.split(' '));
+function tradfiKind(s) {
+  const ut = String(s.underlyingType || '').toUpperCase();
+  const sub = (Array.isArray(s.underlyingSubType) ? s.underlyingSubType : [s.underlyingSubType || '']).join(' ');
+  const base = String(s.baseAsset || '').toUpperCase();
+  if (/EQUITY|STOCK/.test(ut) || /stock|equit|etf/i.test(sub) || TRADFI_STOCK.has(base)) return '股票';
+  if (/COMMODITY|METAL/.test(ut) || /commodit|metal|energy|gold|silver/i.test(sub) || TRADFI_CMDTY.has(base)) return '商品';
+  if (/INDEX/.test(ut) || /index/i.test(sub)) return '指數';
+  if ((ut && ut !== 'COIN') || s.contractType !== 'PERPETUAL' || /tradfi|forex/i.test(sub)) return '傳統金融';
+  return '';
+}
 async function loadExchangeInfo() {
   const j = await getJSON('/fapi/v1/exchangeInfo');
   const m = new Map();
   for (const s of j.symbols) {
     // 幣安的股票、商品合約可能用 TRADIFI_PERPETUAL 這類合約型態，所以只要是永續都收
     if (!/PERPETUAL/.test(s.contractType || '') || s.quoteAsset !== 'USDT' || s.status !== 'TRADING') continue;
-    const ut = s.underlyingType || 'COIN';
-    const kind = ut === 'COIN' && s.contractType === 'PERPETUAL' ? '' : ({ EQUITY: '股票', STOCK: '股票', COMMODITY: '商品', INDEX: '指數' }[ut] || '傳統金融');
+    const kind = tradfiKind(s);
     const pf = (s.filters || []).find((f) => f.filterType === 'PRICE_FILTER');
     m.set(s.symbol, { base: s.baseAsset, kind, tick: pf ? +pf.tickSize : 0.0001, dec: tickDec(pf ? pf.tickSize : '0.0001') });
   }
@@ -1029,7 +1041,7 @@ function saveCache() {
   try {
     const now = Date.now();
     localStorage.setItem('bnRadarCache', JSON.stringify({
-      t: state.lastScan, results: state.results, mkt: state.mkt,
+      v: 2, t: state.lastScan, results: state.results, mkt: state.mkt,
       info: [...state.info], infoAt: state.infoAt,
       alerted: [...state.alerted].filter(([, v]) => now - v.t < 24 * 3600e3)
     }));
@@ -1038,7 +1050,7 @@ function saveCache() {
 function loadCache() {
   try {
     const c = JSON.parse(localStorage.getItem('bnRadarCache') || 'null');
-    if (!c || !c.results || Date.now() - c.t > 24 * 3600e3) return false;
+    if (!c || c.v !== 2 || !c.results || Date.now() - c.t > 24 * 3600e3) return false; // 舊版快取直接丟掉，重掃
     state.info = new Map(c.info); state.infoAt = c.infoAt || 0;
     state.results = c.results; state.lastScan = c.t; state.mkt = c.mkt;
     state.alerted = new Map(c.alerted || []); state.firstDone = true; // 已通知過的不會因為重開 App 再通知一次
